@@ -44,10 +44,40 @@ function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::Pa
     end
 end
 
-# computegradient[i] = ⟨h_i⟩_η - ⟨h_i⟩_ρ
-function computegradient(h::Vector{<:PauliString}, eta::PauliSum, rho::PauliSum)
-    [computepartialderivative(hi, eta, rho) for hi in h]
+function computegradients(params::HamiltonianParams, eta::PauliSum, rho::PauliSum)
+    n = length(params.wi_xyz[1])
+    grad_wi = ntuple(_ -> zeros(n), 3)
+    grad_wij = ntuple(_ -> zeros(n, n), 3)
+
+    H = makehamiltonian(params)
+    for h in H
+        val = computepartialderivative(h, eta, rho)
+        pauli_str = PauliPropagation.inttostring(h.term, h.nqubits)
+        indices = findall(c -> c != 'I', pauli_str)
+        w = length(indices)
+
+        if w == 1
+            i = indices[1]
+            sym = pauli_str[i]
+            k = sym == 'X' ? 1 : sym == 'Y' ? 2 : 3
+            grad_wi[k][i] = val
+        elseif w == 2
+            i, j = indices
+            sym = pauli_str[i]  # both have same symbol (X, Y, or Z)
+            k = sym == 'X' ? 1 : sym == 'Y' ? 2 : 3
+            grad_wij[k][i, j] = val
+            grad_wij[k][j, i] = val
+        else
+            @warn "Unexpected Pauli term with weight=$w : $pauli_str"
+        end
+    end
+
+    return HamiltonianParams(grad_wi, grad_wij)
 end
 
-# gradient descent!
-gradientdescentstep(params::Vector{<:Real}, grads::Vector{<:Real}, gamma::Real) = params .- gamma .* grads 
+function updateparameters!(params::HamiltonianParams, grads::HamiltonianParams, γ::Float64)
+    for k in 1:3
+        params.wi_xyz[k]  .-= γ .* grads.wi_xyz[k]
+        params.wij_xyz[k] .-= γ .* grads.wij_xyz[k]
+    end
+end
