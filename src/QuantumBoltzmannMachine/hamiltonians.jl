@@ -1,3 +1,4 @@
+import Base: *, /  # to extend these operators
 struct HamiltonianParams
     wi_xyz::NTuple{3, Vector{Float64}}   # e.g. [Bx_i], [By_i], [Bz_i] per site
     wij_xyz::NTuple{3, Matrix{Float64}}  # e.g. [Jx_ij], [Jy_ij], [Jz_ij] per pair
@@ -12,6 +13,18 @@ function HamiltonianParams(n::Int;
     wij = ntuple(k -> fill(wij_xyz[k], n, n), 3)
     return HamiltonianParams(wi, wij)
 end
+
+# scalar * HamiltonianParams
+*(β::Real, p::HamiltonianParams) = HamiltonianParams(
+    (β .* p.wi_xyz[1], β .* p.wi_xyz[2], β .* p.wi_xyz[3]),
+    (β .* p.wij_xyz[1], β .* p.wij_xyz[2], β .* p.wij_xyz[3])
+)
+
+# HamiltonianParams * scalar (optional, for symmetry)
+*(p::HamiltonianParams, β::Real) = β * p
+
+# division by scalar
+/(p::HamiltonianParams, β::Real) = (1/β) * p
 
 """
     makehamiltonian(params::HamiltonianParams; connectivity=:nearest, periodic=false)

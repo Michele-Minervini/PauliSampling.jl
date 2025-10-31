@@ -109,7 +109,7 @@ function propagate_ite!(
 end
 
 function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer; 
-    beta::Float64 = 1.0, max_weight=Inf, max_sins=Inf, min_abs_coeff=1e-10) where {CT}
+    beta::Real = 1.0, max_weight=Inf, max_sins=Inf, min_abs_coeff=1e-10) where {CT}
 
     psum = PauliSum(CT, nq)
     add!(psum, PauliString(nq, :I, 1, 1))
