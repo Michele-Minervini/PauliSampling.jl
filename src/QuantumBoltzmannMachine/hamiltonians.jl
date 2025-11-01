@@ -1,57 +1,191 @@
-import Base: *, /  # to extend these operators
-struct HamiltonianParams
-    wi_xyz::NTuple{3, Vector{Float64}}   # e.g. [Bx_i], [By_i], [Bz_i] per site
-    wij_xyz::NTuple{3, Matrix{Float64}}  # e.g. [Jx_ij], [Jy_ij], [Jz_ij] per pair
+###############################################################
+#               GENERAL HAMILTONIAN GENERATOR                 #
+#    Supports 1-local and full 9-combination 2-local terms    #
+#          Fully compatible with gradients optimizer          #
+###############################################################
+
+# Each site can have 3 field components (X,Y,Z)
+# Each pair can have 9 coupling components (XX, XY, XZ, YX, YY, YZ, ZX, ZY, ZZ)
+struct HamiltonianParameters
+    wi_xyz::NTuple{3, Vector{Float64}}        # per-site fields
+    wij_xyz::NTuple{9, Matrix{Float64}}       # per-pair couplings
 end
 
 
-function HamiltonianParams(n::Int;
-        wi_xyz=(0.0, 0.0, 0.0),
-        wij_xyz=(1.0, 1.0, 1.0))
-    
-    wi = ntuple(k -> fill(wi_xyz[k], n), 3)
-    wij = ntuple(k -> fill(wij_xyz[k], n, n), 3)
-    return HamiltonianParams(wi, wij)
+"""
+    HamiltonianParameters(n; wi_xyz=(0,0,0), wij_xyz=fill(0,9))
+
+Low-level constructor: creates dense per-site and per-pair arrays.
+"""
+function HamiltonianParameters(n::Int;
+        wi_xyz::NTuple{3, Real} = (0.0, 0.0, 0.0),
+        wij_xyz::NTuple{9, Real} = ntuple(_ -> 0.0, 9))
+
+    wi  = ntuple(k -> fill(Float64(wi_xyz[k]), n), 3)
+    wij = ntuple(k -> fill(Float64(wij_xyz[k]), n, n), 9)
+    return HamiltonianParameters(wi, wij)
 end
 
-# scalar * HamiltonianParams
-*(β::Real, p::HamiltonianParams) = HamiltonianParams(
-    (β .* p.wi_xyz[1], β .* p.wi_xyz[2], β .* p.wi_xyz[3]),
-    (β .* p.wij_xyz[1], β .* p.wij_xyz[2], β .* p.wij_xyz[3])
+
+# ------------------------------------------------------------------
+# 1. MODEL CATALOGUE (Allowed local and pairwise terms per model)
+# ------------------------------------------------------------------
+
+const MODEL_AXES = Dict{Symbol, NamedTuple}(
+    # Ising family
+    :ising                   => (p1 = (:Z,),              p2 = (:ZZ,)),
+    :tfim                    => (p1 = (:X,),              p2 = (:ZZ,)),
+    :tfim_tilted             => (p1 = (:X, :Z),          p2 = (:ZZ,)),
+
+    # 2-local lattice models
+    :xx                      => (p1 = (),                p2 = (:XX,)),
+    :xy                      => (p1 = (),                p2 = (:XX, :YY)),
+    :xyz                     => (p1 = (),                p2 = (:XX, :YY, :ZZ)),
+
+    # Heisenberg family
+    :heisenberg              => (p1 = (),                p2 = (:XX, :YY, :ZZ)),
+    :heisenberg_fields       => (p1 = (:X, :Y, :Z),      p2 = (:XX, :YY, :ZZ)),
+    :heisenberg_fields_real  => (p1 = (:X, :Z),          p2 = (:XX, :YY, :ZZ)),
+
+    # Fully general
+    :generic                 => (p1 = (:X, :Y, :Z),      p2 = (:XX, :XY, :XZ, :YX, :YY, :YZ, :ZX, :ZY, :ZZ)),
+    :generic_real            => (p1 = (:X, :Z),          p2 = (:XX, :XZ, :YY, :ZX, :ZZ))
 )
 
-# HamiltonianParams * scalar (optional, for symmetry)
-*(p::HamiltonianParams, β::Real) = β * p
 
-# division by scalar
-/(p::HamiltonianParams, β::Real) = (1/β) * p
+# helper: single-axis symbol → index
+@inline function axis_index(ax::Symbol)
+    ax === :X && return 1
+    ax === :Y && return 2
+    ax === :Z && return 3
+    error("Unknown axis $ax")
+end
+
+# helper: pair axis symbol (e.g. :XY) → index in 1:9
+@inline function pair_index(term::Symbol)
+    s = String(term)
+    length(s) == 2 || error("Invalid 2-local term symbol $term")
+    ax1, ax2 = Symbol(s[1]), Symbol(s[2])
+    i = axis_index(ax1)
+    j = axis_index(ax2)
+    return 3*(i-1) + j   # maps (1,1)->1, (1,2)->2, ..., (3,3)->9
+end
+
+
+# ------------------------------------------------------------------
+# 2. MODEL-AWARE INITIALIZATION
+# ------------------------------------------------------------------
 
 """
-    makehamiltonian(params::HamiltonianParams; connectivity=:nearest, periodic=false)
+    parameters(model::Symbol, n::Int;
+                          init=:zeros, field_scale=0.1, coupling_scale=0.1,
+                          rng=Random.default_rng())
 
-Build a generic spin-½ Hamiltonian:
-H = Σ_i Σ_k (wi_xyz[k][i]/2) σᵢᵏ  +  Σ_{i<j} Σ_k (wij_xyz[k][i,j]/4) σᵢᵏ σⱼᵏ
+Create a `HamiltonianParameters` for a specific model.
 
-Keyword arguments:
-- `connectivity`: :nearest (default), :nextnearest, or :alltoall
-- `periodic`: whether to include periodic boundary conditions
+Each allowed axis (from MODEL_AXES[model]) is populated;
+everything else is left zero.
+
+Arguments
+---------
+- `model`: one of keys(MODEL_AXES)
+- `n`: number of qubits/spins
+- `init`: one of `:zeros`, `:randn`, or `:custom`
+- `field_scale`, `coupling_scale`: scaling for random init
+- `field_vals`: Dict of specific field coefficients, e.g. `Dict(:X => -0.8, :Z => 0.1)`
+- `coupling_vals`: Dict of specific couplings, e.g. `Dict(:ZZ => 0.3, :XX => 0.2)`
+- `rng`: random number generator
+
+If `field_vals` or `coupling_vals` is provided, those values override
+the default initialization for the corresponding axes.
 """
-function makehamiltonian(params::HamiltonianParams; 
-                         connectivity::Symbol = :nearest, 
-                         periodic::Bool = false)
+function parameters(model::Symbol, n::Int;
+        init::Symbol = :zeros,
+        field_scale::Real = 0.1,
+        coupling_scale::Real = 0.1,
+        field_vals::Union{Nothing, Dict{Symbol,<:Real}} = nothing,
+        coupling_vals::Union{Nothing, Dict{Symbol,<:Real}} = nothing,
+        rng = Random.default_rng())
+
+    haskey(MODEL_AXES, model) || error("Unknown model: $model")
+    spec = MODEL_AXES[model]
+
+    wi  = ntuple(_ -> zeros(n), 3)
+    wij = ntuple(_ -> zeros(n, n), 9)
+
+    # ---- 1-local terms ----
+    for ax in spec.p1
+        k = axis_index(ax)
+        val = field_vals !== nothing && haskey(field_vals, ax) ? field_vals[ax] : nothing
+        if val !== nothing
+            wi[k] .= val
+        elseif init === :randn
+            wi[k] .= field_scale .* randn(rng, n)
+        elseif init === :zeros
+            # already zero
+        else
+            error("Unknown init mode $init")
+        end
+    end
+
+    # ---- 2-local terms ----
+    for term in spec.p2
+        pidx = pair_index(term)
+        val = coupling_vals !== nothing && haskey(coupling_vals, term) ? coupling_vals[term] : nothing
+        if val !== nothing
+            wij[pidx] .= val
+        elseif init === :randn
+            wij[pidx] .= coupling_scale .* randn(rng, n, n)
+        elseif init === :zeros
+            # already zero
+        else
+            error("Unknown init mode $init")
+        end
+    end
+
+    return HamiltonianParameters(wi, wij)
+end
+
+
+# ------------------------------------------------------------------
+# 3. HAMILTONIAN BUILDER
+# ------------------------------------------------------------------
+
+"""
+    makehamiltonian(params::HamiltonianParameters;
+                    connectivity=:nearest, periodic=false, model=nothing)
+
+Build the full Hamiltonian as a vector of `PauliString`s.
+Supports all 9 cross-axis 2-local terms.
+"""
+function makehamiltonian(params::HamiltonianParameters;
+        connectivity::Symbol = :nearest,
+        periodic::Bool = false,
+        model::Union{Nothing,Symbol} = nothing)
 
     n = length(params.wi_xyz[1])
     H = PauliString[]
 
-    # ---- 1. Add single-site (field) terms ----
+    allowed_p1 = nothing
+    allowed_p2 = nothing
+    if model !== nothing
+        haskey(MODEL_AXES, model) || error("Unknown model $model")
+        allowed_p1 = MODEL_AXES[model].p1
+        allowed_p2 = MODEL_AXES[model].p2
+    end
+
+    # ---- 1-local field terms ----
     for i in 1:n, (k, sym) in enumerate((:X, :Y, :Z))
+        if allowed_p1 !== nothing && !(sym in allowed_p1)
+            continue
+        end
         coeff = params.wi_xyz[k][i] / 2
-        if coeff != 0
+        if coeff != 0.0
             push!(H, PauliString(n, sym, i, coeff))
         end
     end
 
-    # ---- 2. Define neighbor list depending on connectivity type ----
+    # ---- define neighbor list ----
     pairs = Tuple{Int,Int}[]
     if connectivity == :nearest
         for i in 1:n-1
@@ -76,12 +210,20 @@ function makehamiltonian(params::HamiltonianParams;
         error("Unknown connectivity type: $connectivity")
     end
 
-    # ---- 3. Build the two-body terms ----
-    for (i, j) in pairs, (k, sym) in enumerate((:X, :Y, :Z))
-        coeff = params.wij_xyz[k][i, j] / 4
-        if coeff != 0
-            qinds = sort([i, j])  # ensure consistent internal order
-            push!(H, PauliString(n, [sym, sym], qinds, coeff))
+    # ---- 2-local interaction terms ----
+    AXES = (:X, :Y, :Z)
+    for (i, j) in pairs
+        for ai in 1:3, aj in 1:3
+            sym1, sym2 = AXES[ai], AXES[aj]
+            term = Symbol(string(sym1, sym2))
+            if allowed_p2 !== nothing && !(term in allowed_p2)
+                continue
+            end
+            pidx = 3*(ai-1) + aj
+            coeff = params.wij_xyz[pidx][i, j] / 4
+            if coeff != 0.0
+                push!(H, PauliString(n, [sym1, sym2], [i, j], coeff))
+            end
         end
     end
 

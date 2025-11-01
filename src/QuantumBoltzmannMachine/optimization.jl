@@ -29,7 +29,7 @@ term corresponding to `H_i`, optionally applying the spin-½ scaling.
 
 The result is (Tr[η H_i] - Tr[ρ_θ H_i]) with optional scaling.
 """
-function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=true)
+function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=false)
     n = H_i.nqubits
     val_eta  = getcoeff(eta, H_i)  * 2^n
     val_rho  = getcoeff(rho_theta, H_i) * 2^n
@@ -44,10 +44,10 @@ function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::Pa
     end
 end
 
-function computegradients(params::HamiltonianParams, eta::PauliSum, rho::PauliSum)
+function computegradients(params::HamiltonianParameters, eta::PauliSum, rho::PauliSum)
     n = length(params.wi_xyz[1])
     grad_wi = ntuple(_ -> zeros(n), 3)
-    grad_wij = ntuple(_ -> zeros(n, n), 3)
+    grad_wij = ntuple(_ -> zeros(n, n), 9)
 
     H = makehamiltonian(params)
     for h in H
@@ -61,23 +61,28 @@ function computegradients(params::HamiltonianParams, eta::PauliSum, rho::PauliSu
             sym = pauli_str[i]
             k = sym == 'X' ? 1 : sym == 'Y' ? 2 : 3
             grad_wi[k][i] = val
+
         elseif w == 2
             i, j = indices
-            sym = pauli_str[i]  # both have same symbol (X, Y, or Z)
-            k = sym == 'X' ? 1 : sym == 'Y' ? 2 : 3
-            grad_wij[k][i, j] = val
-            grad_wij[k][j, i] = val
+            s1, s2 = pauli_str[i], pauli_str[j]
+            ai = s1 == 'X' ? 1 : s1 == 'Y' ? 2 : 3
+            aj = s2 == 'X' ? 1 : s2 == 'Y' ? 2 : 3
+            pidx = 3*(ai-1) + aj  # map to 1:9
+            grad_wij[pidx][i, j] = val
+            grad_wij[pidx][j, i] = val
         else
             @warn "Unexpected Pauli term with weight=$w : $pauli_str"
         end
     end
 
-    return HamiltonianParams(grad_wi, grad_wij)
+    return HamiltonianParameters(grad_wi, grad_wij)
 end
 
-function updateparameters!(params::HamiltonianParams, grads::HamiltonianParams, γ::Float64)
+function updateparameters!(params::HamiltonianParameters, grads::HamiltonianParameters, γ::Float64)
     for k in 1:3
         params.wi_xyz[k]  .-= γ .* grads.wi_xyz[k]
+    end
+    for k in 1:9
         params.wij_xyz[k] .-= γ .* grads.wij_xyz[k]
     end
 end

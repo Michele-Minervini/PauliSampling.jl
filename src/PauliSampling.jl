@@ -53,7 +53,8 @@ include("QuantumBoltzmannMachine/QuantumBoltzmannMachine.jl")
 export
     makethermalstate,
     maketfim,
-    HamiltonianParams,
+    parameters,
+    HamiltonianParameters,
     makehamiltonian,
     computequantumrelativeentropy,
     computesymmetriceigenvalues,
