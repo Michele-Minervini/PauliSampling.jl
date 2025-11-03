@@ -29,7 +29,7 @@ term corresponding to `H_i`, optionally applying the spin-½ scaling.
 
 The result is (Tr[η H_i] - Tr[ρ_θ H_i]) with optional scaling.
 """
-function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=false)
+function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=true)
     n = H_i.nqubits
     val_eta  = getcoeff(eta, H_i)  * 2^n
     val_rho  = getcoeff(rho_theta, H_i) * 2^n
@@ -44,45 +44,29 @@ function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::Pa
     end
 end
 
-function computegradients(params::HamiltonianParameters, eta::PauliSum, rho::PauliSum)
-    n = length(params.wi_xyz[1])
-    grad_wi = ntuple(_ -> zeros(n), 3)
-    grad_wij = ntuple(_ -> zeros(n, n), 9)
+"""
+    computegradients(H::Vector{PauliString}, eta::PauliSum, rho::PauliSum)
 
-    H = makehamiltonian(params)
-    for h in H
-        val = computepartialderivative(h, eta, rho)
-        pauli_str = PauliPropagation.inttostring(h.term, h.nqubits)
-        indices = findall(c -> c != 'I', pauli_str)
-        w = length(indices)
-
-        if w == 1
-            i = indices[1]
-            sym = pauli_str[i]
-            k = sym == 'X' ? 1 : sym == 'Y' ? 2 : 3
-            grad_wi[k][i] = val
-
-        elseif w == 2
-            i, j = indices
-            s1, s2 = pauli_str[i], pauli_str[j]
-            ai = s1 == 'X' ? 1 : s1 == 'Y' ? 2 : 3
-            aj = s2 == 'X' ? 1 : s2 == 'Y' ? 2 : 3
-            pidx = 3*(ai-1) + aj  # map to 1:9
-            grad_wij[pidx][i, j] = val
-            grad_wij[pidx][j, i] = val
-        else
-            @warn "Unexpected Pauli term with weight=$w : $pauli_str"
-        end
+Compute gradients ∂L/∂cᵢ for each coefficient cᵢ of the Hamiltonian terms in `H`.
+Returns a vector of Float64 with same length as H.
+"""
+function computegradients(H::Vector{<:PauliString}, eta::PauliSum, rho::PauliSum)
+    grads = Vector{Float64}(undef, length(H))
+    @inbounds for (i, h) in enumerate(H)
+        grads[i] = computepartialderivative(h, eta, rho)
     end
-
-    return HamiltonianParameters(grad_wi, grad_wij)
+    return grads
 end
 
-function updateparameters!(params::HamiltonianParameters, grads::HamiltonianParameters, γ::Float64)
-    for k in 1:3
-        params.wi_xyz[k]  .-= γ .* grads.wi_xyz[k]
+"""
+    updatehamiltonian!(H::Vector{PauliString}, grads::Vector{Float64}, γ::Real)
+
+In-place update of Hamiltonian coefficients:  cᵢ ← cᵢ - γ * grads[i].
+"""
+function updatehamiltonian!(H::Vector{<:PauliString}, grads::Vector{Float64}, γ::Real)
+    @assert length(H) == length(grads)
+    @inbounds for i in eachindex(H)
+        H[i] = PauliString(H[i].nqubits, H[i].term, H[i].coeff - γ * grads[i])
     end
-    for k in 1:9
-        params.wij_xyz[k] .-= γ .* grads.wij_xyz[k]
-    end
+    return H
 end

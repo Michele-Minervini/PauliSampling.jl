@@ -61,6 +61,6 @@ export
     paulistringtocircuit,
     paulistringtomatrix,
     computegradients,
-    updateparameters!
+    updatehamiltonian!
 
 end
