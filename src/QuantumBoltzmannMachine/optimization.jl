@@ -29,7 +29,7 @@ term corresponding to `H_i`, optionally applying the spin-½ scaling.
 
 The result is (Tr[η H_i] - Tr[ρ_θ H_i]) with optional scaling.
 """
-function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=true)
+function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::PauliSum; spin_scaling::Bool=false)
     n = H_i.nqubits
     val_eta  = getcoeff(eta, H_i)  * 2^n
     val_rho  = getcoeff(rho_theta, H_i) * 2^n
