@@ -9,6 +9,7 @@ using Combinatorics
 using BenchmarkTools
 using Random
 using LinearAlgebra
+using SparseArrays
 using LinearMaps
 using Arpack
 using Plots
@@ -52,10 +53,12 @@ export
 include("QuantumBoltzmannMachine/QuantumBoltzmannMachine.jl")
 export
     makethermalstate,
+    makethermalstate_matrix,
     maketfim,
     parameters,
     HamiltonianParameters,
     makehamiltonian,
+    makehamiltonian_matrix,
     computequantumrelativeentropy,
     computesymmetriceigenvalues,
     paulistringtocircuit,

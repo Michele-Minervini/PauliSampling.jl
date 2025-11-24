@@ -229,3 +229,120 @@ function makehamiltonian(params::HamiltonianParameters;
 
     return H
 end
+
+
+# ------------------------------------------------------------------
+# 4. MATRIX REPRESENTATIONS (SPARSE)
+# ------------------------------------------------------------------
+# Functions to convert model parameters into explicit Sparse Matrices 
+# Distinct from the PauliString approach
+
+# Pre-allocate Sparse Pauli Matrices
+# We add 0.0im to X and Z to ensure they are all the same ComplexF64 type.
+const I2_sp = sparse([1.0 0.0; 0.0 1.0] .+ 0.0im)
+const σx_sp = sparse([0.0 1.0; 1.0 0.0] .+ 0.0im)
+const σy_sp = sparse([0.0 -1.0im; 1.0im 0.0])
+const σz_sp = sparse([1.0 0.0; 0.0 -1.0] .+ 0.0im)
+
+# Tuple for indexing (1=>X, 2=>Y, 3=>Z)
+const PAULIS_SP = (σx_sp, σy_sp, σz_sp)
+
+"""
+    embed_op_sparse(n::Int, ops::Dict{Int, SparseMatrixCSC})
+
+Constructs the sparse tensor product operator for an n-qubit system.
+"""
+function embed_op_sparse(n::Int, ops::Dict{Int, <:AbstractSparseMatrix})
+    # We build the list of matrices for the Kronecker product
+    mats = Vector{SparseMatrixCSC{ComplexF64, Int}}(undef, n)
+    for i in 1:n
+        mats[i] = get(ops, i, I2_sp)
+    end
+    # reduce(kron, ...) is highly optimized for SparseArrays in Julia
+    return reduce(kron, mats)
+end
+
+"""
+    makehamiltonian_matrix(params::HamiltonianParameters;
+                            connectivity=:nearest, periodic=false, model=nothing)
+
+Build the full Hamiltonian as a SparseMatrixCSC.
+"""
+function makehamiltonian_matrix(params::HamiltonianParameters;
+        connectivity::Symbol = :nearest,
+        periodic::Bool = false,
+        model::Union{Nothing,Symbol} = nothing)
+
+    n = length(params.wi_xyz[1])
+    dim = 2^n
+    
+    # Initialize an empty sparse matrix of size 2^n x 2^n
+    # spzeros does not allocate memory for elements, so this is cheap.
+    H = spzeros(ComplexF64, dim, dim)
+
+    # ---- Filter Allowed Terms based on Model ----
+    allowed_p1 = nothing
+    allowed_p2 = nothing
+    if model !== nothing
+        haskey(MODEL_AXES, model) || error("Unknown model $model")
+        allowed_p1 = MODEL_AXES[model].p1
+        allowed_p2 = MODEL_AXES[model].p2
+    end
+
+    # ---- 1-local field terms ----
+    for i in 1:n, k in 1:3
+        sym = (:X, :Y, :Z)[k]
+        
+        if allowed_p1 !== nothing && !(sym in allowed_p1)
+            continue
+        end
+
+        coeff = params.wi_xyz[k][i] / 2
+        if coeff != 0.0
+            # Create sparse op
+            op = embed_op_sparse(n, Dict(i => PAULIS_SP[k]))
+            H = H + coeff * op  # Sparse addition
+        end
+    end
+
+    # ---- Define Neighbor List ----
+    pairs = Tuple{Int,Int}[]
+    if connectivity == :nearest
+        for i in 1:n-1; push!(pairs, (i, i+1)); end
+        periodic && push!(pairs, (n, 1))
+    elseif connectivity == :nextnearest
+        for i in 1:n-2; push!(pairs, (i, i+2)); end
+        if periodic
+            push!(pairs, (n-1, 1)); push!(pairs, (n, 2))
+        end
+    elseif connectivity == :alltoall
+        for i in 1:n-1, j in i+1:n; push!(pairs, (i, j)); end
+    else
+        error("Unknown connectivity type: $connectivity")
+    end
+
+    # ---- 2-local interaction terms ----
+    AXES_SYMBOLS = (:X, :Y, :Z)
+    
+    for (i, j) in pairs
+        for ai in 1:3, aj in 1:3
+            sym1, sym2 = AXES_SYMBOLS[ai], AXES_SYMBOLS[aj]
+            term_sym = Symbol(string(sym1, sym2))
+
+            if allowed_p2 !== nothing && !(term_sym in allowed_p2)
+                continue
+            end
+
+            pidx = 3*(ai-1) + aj
+            coeff = params.wij_xyz[pidx][i, j] / 4
+            
+            if coeff != 0.0
+                # Create sparse term σ_i ⊗ σ_j
+                op = embed_op_sparse(n, Dict(i => PAULIS_SP[ai], j => PAULIS_SP[aj]))
+                H = H + coeff * op
+            end
+        end
+    end
+
+    return H
+end

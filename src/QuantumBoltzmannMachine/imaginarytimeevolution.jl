@@ -124,3 +124,46 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
     mult!(unwrapped_psum, 1 / 2.0^nq)  # Normalize trace = 1
     return unwrapped_psum
 end
+
+"""
+    makethermalstate_matrix(H::AbstractMatrix{<:Number}, β::Real)
+
+Calculates the thermal state density matrix ρ = exp(-βH) / Z.
+WARNING: This returns a DENSE matrix. Do not use for N > 12.
+"""
+function makethermalstate_matrix(H::AbstractMatrix{<:Number}, β::Real)
+    # 1. Safety Check for System Size
+    N_dim = size(H, 1)
+    if N_dim > 4096 # Corresponds to N=12 qubits
+        @warn "System size N=$(Int(log2(N_dim))) is large for full density matrix construction. This will allocate significant memory."
+    end
+
+    # 2. Explicit conversion to Dense Matrix
+    # We do this because exp(Sparse) creates a dense matrix anyway.
+    # Converting explicitly makes the intention clear and avoids fallback overhead.
+    H_dense = Matrix(H) 
+
+    # 3. Calculate Thermal State
+    # Hermitian matrices can use eigen decomposition for faster/more stable exp
+    if ishermitian(H_dense)
+        vals, vecs = eigen(H_dense)
+        # ρ = U * diag(exp(-βE)) * U'
+        # We use a numerically stable shift to avoid overflow/underflow
+        # exp(-βE) / sum(exp(-βE)) = exp(-β(E - E_min)) / sum(...)
+        
+        # Shift energies so the ground state is 0 (numerical stability)
+        min_E = minimum(vals)
+        shifted_vals = exp.(-β .* (vals .- min_E))
+        
+        Z = sum(shifted_vals)
+        
+        # Reconstruct matrix: V * Diagonal * V'
+        ρ = vecs * Diagonal(shifted_vals ./ Z) * vecs'
+        return ρ
+    else
+        # Fallback for non-Hermitian (unlikely in physics)
+        A = -β .* H_dense
+        E = exp(A)
+        return E ./ tr(E)
+    end
+end

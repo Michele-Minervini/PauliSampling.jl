@@ -23,8 +23,7 @@ function computequantumrelativeentropy(eta::AbstractMatrix, evals_eta::AbstractV
 end
 
 # Symmetric eigenvalues 
-computesymmetriceigenvalues(M::AbstractMatrix) = eigen(Hermitian(M)).values
-
+computesymmetriceigenvalues(M::AbstractMatrix) = eigen(Hermitian(Matrix(M))).values
 
 
 
@@ -56,42 +55,55 @@ function paulistringtocircuit(hamiltonian::Vector{<:PauliString})
 end
 
 
-# Interpret a Pauli word into a matrix 
+# 1. Helper: Sparse Single Pauli Matrices
+# We force them to be ComplexF64 so X, Y, Z all have the same type.
+const I_sp = sparse([1.0+0.0im 0.0; 0.0 1.0])
+const X_sp = sparse([0.0+0.0im 1.0; 1.0 0.0])
+const Y_sp = sparse([0.0 -1.0im; 1.0im 0.0])
+const Z_sp = sparse([1.0+0.0im 0.0; 0.0 -1.0])
+
+const MATS_SP = Dict('I' => I_sp, 'X' => X_sp, 'Y' => Y_sp, 'Z' => Z_sp)
+
+# 2. Builder: Interpret a Pauli word into a SPARSE matrix 
 function paulitomatrix(p::AbstractString)
-    I = [1 0; 0 1]
-    X = [0 1; 1 0]
-    Y = [0 -1im; 1im 0]
-    Z = [1 0; 0 -1]
-    mats = Dict('I' => I, 'X' => X, 'Y' => Y, 'Z' => Z)
-    mat = mats[p[1]]
+    # Start with the first operator
+    mat = MATS_SP[p[1]]
+    
+    # Kronecker product preserves sparsity efficiently in Julia
     for i in 2:length(p)
-        mat = kron(mat, mats[p[i]])
+        mat = kron(mat, MATS_SP[p[i]])
     end
     return mat
 end
 
-# Convert a vector of PauliString terms into its full Hamiltonian matrix
-## Vector-of-PauliStrings as input
+# 3. Builder: Vector of PauliStrings -> Sparse Matrix
 function paulistringtomatrix(pstring::Vector{<:PauliString})
     nq = pstring[1].nqubits
     dim = 2^nq
-    Hmat = zeros(ComplexF64, dim, dim)
+    
+    # Initialize empty sparse matrix
+    Hmat = spzeros(ComplexF64, dim, dim)
+    
     for term in pstring
         coeff = term.coeff
         ps = PauliPropagation.inttostring(term.term, term.nqubits)
-        Hmat .+= coeff .* paulitomatrix(ps)
+        
+        # Accumulate: Sparse addition handles structural changes automatically
+        # Note: 'Hmat += ...' is slightly better than 'Hmat = Hmat + ...' in newer Julia
+        Hmat = Hmat + coeff * paulitomatrix(ps)
     end
     return Hmat
 end
 
-## PauliSum as input
+# 4. Builder: PauliSum -> Sparse Matrix
 function paulistringtomatrix(psum::PauliSum)
     nq = psum.nqubits
     dim = 2^nq
-    Hmat = zeros(ComplexF64, dim, dim)
+    Hmat = spzeros(ComplexF64, dim, dim)
+    
     for (term, coeff) in psum.terms
         ps = PauliPropagation.inttostring(term, nq)
-        Hmat .+= coeff .* paulitomatrix(ps)
+        Hmat = Hmat + coeff * paulitomatrix(ps)
     end
     return Hmat
 end
