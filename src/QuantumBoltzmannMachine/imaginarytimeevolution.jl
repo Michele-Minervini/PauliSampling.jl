@@ -131,7 +131,7 @@ end
 
 Calculates the thermal state density matrix ρ = exp(-βH) / Z and its eigenvalues (thermal probabilities).
 """
-function makethermalstate_and_probs(H::AbstractMatrix{<:Number}, β::Real)
+function makethermalstate_matrix(H::AbstractMatrix{<:Number}, β::Real)
     
     # 1. Convert to Dense and Diagonalize H
     H_dense = Matrix(H) 
