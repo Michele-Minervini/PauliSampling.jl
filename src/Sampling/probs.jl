@@ -59,45 +59,45 @@ function coset_normalizing_factor(psum; to_filter=true, num_set_bits=0, set_bits
     return acc
 end
 
-function compute_grouped_traces(psum, qinds)
-    # TODO: I don't think I'm normalizing correctly, but it's still giving correct results. Why?
-    num_qinds = length(qinds)
-    coeffs = Vector{ComplexF64}(undef, 2^num_qinds)
-    one_inds = Int[]
-    sizehint!(one_inds, num_qinds)
-    Z_str = fill(:Z, num_qinds)
+# function compute_grouped_traces(psum, qinds)
+#     # TODO: I don't think I'm normalizing correctly, but it's still giving correct results. Why?
+#     num_qinds = length(qinds)
+#     coeffs = Vector{ComplexF64}(undef, 2^num_qinds)
+#     one_inds = Int[]
+#     sizehint!(one_inds, num_qinds)
+#     Z_str = fill(:Z, num_qinds)
 
-    for i in 0:(2^(num_qinds) - 1)
-        empty!(one_inds)
-        get_one_inds!(one_inds, num_qinds, i)
-        @views Z_view = Z_str[1:length(one_inds)]
-        @views qinds_view = qinds[one_inds]
-        coeffs[i + 1] = getcoeff(psum, Z_view, qinds_view)
-    end
-    # eturn ifwht(coeffs)
-    return naive_ifwht!(coeffs)    
-end
+#     for i in 0:(2^(num_qinds) - 1)
+#         empty!(one_inds)
+#         get_one_inds!(one_inds, num_qinds, i)
+#         @views Z_view = Z_str[1:length(one_inds)]
+#         @views qinds_view = qinds[one_inds]
+#         coeffs[i + 1] = getcoeff(psum, Z_view, qinds_view)
+#     end
+#     # eturn ifwht(coeffs)
+#     return naive_ifwht!(coeffs)    
+# end
 
-function naive_ifwht!(x::Vector{ComplexF64})
-    n = length(x)
-    logn = trailing_zeros(n)
-    @assert 2^logn == n "length must be a power of 2"
+# function naive_ifwht!(x::Vector{ComplexF64})
+#     n = length(x)
+#     logn = trailing_zeros(n)
+#     @assert 2^logn == n "length must be a power of 2"
     
-    for i in 0:logn-1
-        step = 1 << (i + 1)
-        half = 1 << i
-        for j in 1:step:n
-            for k in 0:half-1
-                a = x[j + k]
-                b = x[j + k + half]
-                x[j + k] = a + b
-                x[j + k + half] = a - b
-            end
-        end
-    end
-    x ./= n
-    return x
-end
+#     for i in 0:logn-1
+#         step = 1 << (i + 1)
+#         half = 1 << i
+#         for j in 1:step:n
+#             for k in 0:half-1
+#                 a = x[j + k]
+#                 b = x[j + k + half]
+#                 x[j + k] = a + b
+#                 x[j + k + half] = a - b
+#             end
+#         end
+#     end
+#     x ./= n
+#     return x
+# end
 
 function approximate_normalizing_factor(psum, qinds)
     vals = compute_grouped_traces(psum, qinds)

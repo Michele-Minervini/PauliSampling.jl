@@ -8,10 +8,25 @@ function PauliPropagation._tomaskedpaulirotation(imag_pauli_gate::ImaginaryPauli
     return MaskedPauliRotation(imag_pauli_gate.symbols, imag_pauli_gate.qinds, pstr_term)
 end
 
-function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real, psum, aux_psum; kwargs...)
+# # Helper to check if a PauliString is purely diagonal (only I or Z)
+# function _is_diagonal(pstr, nq)
+#     for i in 1:nq
+#         p = getpauli(pstr, i)
+#         # Pauli encoding: 0=I, 1=X, 2=Y, 3=Z. 
+#         # We fail if we see 1 (X) or 2 (Y).
+#         if ispauli(p, 1) || ispauli(p, 2)
+#             return false
+#         end
+#     end
+#     return true
+# end
+
+function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real, psum, aux_psum; prune_non_diagonal::Bool=false, kwargs...)
+
+    # nq = psum.nqubits
 
     # turn the PauliRotation gate into a MaskedPauliRotation gate
-    # this allows for faster operations
+    # this allows for faster operations with bitwise speed
     gate = PauliPropagation._tomaskedpaulirotation(gate, paulitype(psum))
 
     # pre-compute the sinh and cosh values because they are used for every Pauli string that commutes with the gate
@@ -20,28 +35,61 @@ function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real,
 
     # loop over all Pauli strings and their coefficients in the Pauli sum
     for (pstr, coeff) in psum
-
+        
+        # If they anti-commute, the term is unchanged. Skip it.
+        # (WARNING: This means an existing X/Y term might survive here! 
+        #  That is why the final filter in makethermalstate is still required)
         if !commutes(gate, pstr)
             # if the gate does not commute with the pauli string, do nothing
             continue
         end
+
         # else the gate splits the Pauli string into two
-        coeff1 = coeff * cosh_val
+        # Evolution Rule: P -> cosh(θ)P - sinh(θ)PG
         new_pstr, phase = pauliprod(gate.generator_mask, pstr, gate.qinds)
+
+        # --- OPTIMIZATION START ---
+        # If we are in the final layer (prune_non_diagonal=true), check before we write!        
+        if prune_non_diagonal
+            # 1. Optimize Child: If the NEW term has X or Y, don't even calculate it.
+            #    We skip writing to aux_psum entirely.
+            if PauliPropagation.containsXorY(new_pstr)
+                # We strictly discard this branch. 
+                # But we MUST still process the parent branch below.
+                # So we just don't write to aux_psum.
+            else
+                coeff2 = -1 * phase * coeff * sinh_val
+                set!(aux_psum, new_pstr, coeff2)
+            end
+
+            # 2. Optimize Parent: If the OLD term has X or Y, kill it now.
+            if PauliPropagation.containsXorY(pstr)
+                # Effectively delete it from psum by setting coeff to 0
+                set!(psum, pstr, 0.0)
+            else
+                # Valid parent: Update its coefficient
+                coeff1 = coeff * cosh_val
+                set!(psum, pstr, coeff1)
+            end
+            
+            # We are done with this term. Continue to next.
+            continue
+        end
+
+        # --- OPTIMIZATION END ---
+
+        # Standard behavior (if not pruning)
+        coeff1 = coeff * cosh_val
         coeff2 = -1 * phase * coeff * sinh_val
 
-        # set the coefficient of the original Pauli string
         set!(psum, pstr, coeff1)
-
-        # set the coefficient of the new Pauli string in the aux_psum
-        # we can set the coefficient because PauliRotations create non-overlapping new Pauli strings
         set!(aux_psum, new_pstr, coeff2)
     end
 
     return
 end
 
-function applymergetruncate_ite!(gate, psum, aux_psum, thetas, param_idx;max_weight=Inf, min_abs_coeff=1e-10, max_freq=Inf, max_sins=Inf, customtruncfunc=nothing, normalization=false, kwargs...)
+function applymergetruncate_ite!(gate, psum, aux_psum, thetas, param_idx; prune_non_diagonal=false, max_weight=Inf, min_abs_coeff=1e-10, max_freq=Inf, max_sins=Inf, customtruncfunc=nothing, normalization=false, kwargs...)
 
     # Pick out the next theta if gate is a ParametrizedGate.
     # Else set the paramter to nothing for clarity that theta is not used.
@@ -54,7 +102,7 @@ function applymergetruncate_ite!(gate, psum, aux_psum, thetas, param_idx;max_wei
     end
     # Apply the gate to all Pauli strings in psum, potentially writing into auxillary aux_psum in the process.
     # The pauli sums will be changed in-place
-    applytoall!(gate, theta, psum, aux_psum; kwargs...)
+    applytoall!(gate, theta, psum, aux_psum; prune_non_diagonal=prune_non_diagonal, kwargs...)
 
     # Any contents of psum and aux_psum are merged into the larger of the two, which is returned as psum.
     # The other is emptied and returned as aux_psum.
@@ -75,7 +123,8 @@ function applymergetruncate_ite!(gate, psum, aux_psum, thetas, param_idx;max_wei
 end
 
 function propagate_ite!(
-    circ, psum, thetas=nothing;
+    circ, psum, thetas=nothing; 
+    prune_at_final_step::Bool=false, 
     max_weight=Inf, min_abs_coeff=1e-10, max_freq=Inf, max_sins=Inf,
     customtruncfunc=nothing, normalization=false, kwargs...
 )
@@ -94,10 +143,20 @@ function propagate_ite!(
     # Create an auxiliary Pauli sum for intermediate terms
     aux_psum = similar(psum)
 
-    # Loop through gates in reverse order
-    for gate in reverse(circ)
+    # We iterate through the circuit (reversed). 
+    # The "Last Step" of the simulation corresponds to the LAST gate in this loop.
+    reversed_circ = reverse(circ)
+    len_circ = length(reversed_circ)
+
+    for (i, gate) in enumerate(reversed_circ)
+        
+        # Check if we are at the very last gate of the sequence AND pruning is requested
+        is_last_gate = (i == len_circ)
+        do_prune = (prune_at_final_step && is_last_gate)
+
         psum, aux_psum, param_idx = applymergetruncate_ite!(
             gate, psum, aux_psum, thetas, param_idx;
+            prune_non_diagonal=do_prune, # Only true at the very end
             max_weight=max_weight, min_abs_coeff=min_abs_coeff,
             max_freq=max_freq, max_sins=max_sins,
             customtruncfunc=customtruncfunc, normalization=normalization,
@@ -109,21 +168,76 @@ function propagate_ite!(
 end
 
 function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer; 
-    beta::Real = 1.0, max_weight=Inf, max_sins=Inf, min_abs_coeff=1e-10) where {CT}
+    beta::Real = 1.0, 
+    max_weight=Inf, 
+    max_sins=Inf, 
+    min_abs_coeff=1e-10,
+    optimize_for_z_basis::Bool = true # <--- New Argument: Master Switch
+) where {CT}
 
     psum = PauliSum(CT, nq)
     add!(psum, PauliString(nq, :I, 1, 1))
     wrapped_psum = wrapcoefficients(psum, PauliFreqTracker)
 
     for i in 1:num_layers
-        wrapped_psum = propagate_ite!(circuit, wrapped_psum, (beta / num_layers) * thetas; max_weight=max_weight, max_sins=max_sins, min_abs_coeff=min_abs_coeff, normalization=true)
+        # 1. OPTIMIZATION: Tell the propagator to avoid creating NEW junk in the final layer
+        # Logic: We prune ONLY if the user requested the optimization 
+        #        AND we are currently in the final layer.
+        should_prune = optimize_for_z_basis && (i == num_layers)
+
+        wrapped_psum = propagate_ite!(
+            circuit, wrapped_psum, (beta / num_layers) * thetas; 
+            prune_at_final_step=should_prune, # Pass the dynamic condition
+            max_weight=max_weight, max_sins=max_sins, 
+            min_abs_coeff=min_abs_coeff, normalization=true
+        )
     end
 
     unwrapped_psum = unwrapcoefficients(wrapped_psum)
-    mult!(unwrapped_psum, 1 / getcoeff(unwrapped_psum, :I, 1))  # Normalize c_I = 1
-    mult!(unwrapped_psum, 1 / 2.0^nq)  # Normalize trace = 1
+    # Normalize c_I
+    mult!(unwrapped_psum, 1 / getcoeff(unwrapped_psum, :I, 1))
+
+    # 2. SAFETY NET: The Final Sweep
+    # This catches:
+    #   a) Terms that didn't commute with the final gate (skipped by applytoall)
+    #   b) Numerical noise (abs < 1e-15)
+    filter!(unwrapped_psum) do p_int, coeff
+        if abs(coeff) <= 1e-15
+            return false
+        end
+
+        if optimize_for_z_basis
+            # Using the fast check from PauliPropagation
+            if PauliPropagation.containsXorY(p_int)
+                return false
+            end
+        end
+
+        return true
+    end
+
+    # Final Trace Normalization
+    mult!(unwrapped_psum, 1 / 2.0^nq)
+
     return unwrapped_psum
 end
+
+# function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer; 
+#     beta::Real = 1.0, max_weight=Inf, max_sins=Inf, min_abs_coeff=1e-10) where {CT}
+
+#     psum = PauliSum(CT, nq)
+#     add!(psum, PauliString(nq, :I, 1, 1))
+#     wrapped_psum = wrapcoefficients(psum, PauliFreqTracker)
+
+#     for i in 1:num_layers
+#         wrapped_psum = propagate_ite!(circuit, wrapped_psum, (beta / num_layers) * thetas; max_weight=max_weight, max_sins=max_sins, min_abs_coeff=min_abs_coeff, normalization=true)
+#     end
+
+#     unwrapped_psum = unwrapcoefficients(wrapped_psum)
+#     mult!(unwrapped_psum, 1 / getcoeff(unwrapped_psum, :I, 1))  # Normalize c_I = 1
+#     mult!(unwrapped_psum, 1 / 2.0^nq)  # Normalize trace = 1
+#     return unwrapped_psum
+# end
 
 
 """

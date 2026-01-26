@@ -60,10 +60,15 @@ export
     makehamiltonian,
     makehamiltonian_matrix,
     computequantumrelativeentropy,
+    build_bdg_from_pauli,
     computesymmetriceigenvalues,
     paulistringtocircuit,
     paulistringtomatrix,
     computegradients,
-    updatehamiltonian!
+    updatehamiltonian!,
+    jordan_wigner_tfim,
+    get_covariance_matrix,
+    get_bdg_reconstructed_eigenvalues,
+    bdg_expectation
 
 end

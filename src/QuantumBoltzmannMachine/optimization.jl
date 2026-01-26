@@ -44,47 +44,53 @@ function computepartialderivative(H_i::PauliString, eta::PauliSum, rho_theta::Pa
     end
 end
 
-function computepartialderivative(H_i::PauliString, eta::AbstractMatrix, rho_theta::PauliSum; spin_scaling::Bool=false)
+function computepartialderivative(H_i::PauliString, state_matrix::AbstractMatrix, rho_theta::PauliSum; spin_scaling::Bool=false)
     n = H_i.nqubits
+    dim = size(state_matrix, 1)
     
-    # 1. Compute Expectation Value <P_i>_η = Tr(η * P_i)
+    val_eta = 0.0
 
-    """
-    tr_eta_pauli(eta::AbstractMatrix, P::PauliString)
+    # ---------------------------------------------------------
+    # BRANCH 1: BdG Covariance Matrix (Dimension 2 * N)
+    # ---------------------------------------------------------
+    if dim == 2 * n
+        # It is a Covariance Matrix -> Use Wick's Theorem logic
+        
+        # Convert Pauli to String (e.g., "ZIIZ") for the BdG solver
+        p_str = PauliPropagation.inttostring(H_i.term, n)
+        val_eta = bdg_expectation(state_matrix, p_str)
 
-    Computes Tr(eta * P) without allocating the matrix for P.
-    """
-    function tr_eta_pauli(eta::AbstractMatrix, P::PauliString)
-        # P corresponds to a permutation and a phase factor for each index
-        # But generally, P maps basis |k> to phase_k |k'>
-        # Tr(eta * P) = sum_k <k| eta P |k>
+    # ---------------------------------------------------------
+    # BRANCH 2: Exact Density Matrix (Dimension 2^N)
+    # ---------------------------------------------------------
+    elseif dim == 2^n
+        # It is a Full Density Matrix -> Use Matrix Trace
         
-        dim = size(eta, 1)
-        n = P.nqubits
-        total = 0.0 + 0.0im
-        
-        # Iterate over diagonal elements if P is diagonal (Z only)
-        # OR iterate over relevant elements if P is off-diagonal
-        # This logic can be complex to implement from scratch without a library.
-        
-        # FASTEST ALTERNATIVE using your existing dense matrix approach:
-        # Use the dot product property: Tr(A' * B) = dot(A, B)
-        # But since P is sparse, we shouldn't build it.
-        
-        # Fallback to the corrected matrix approach if you want to keep code simple:
-        P_mat = paulistringtomatrix([PauliString(P.nqubits, P.term, 1.0)])
-        return real(tr(eta * P_mat))
+        # Helper inner function for trace
+        function tr_eta_pauli(eta::AbstractMatrix, P::PauliString)
+             # Fallback to sparse matrix construction if needed
+             # Or use your existing optimized trace logic
+             P_mat = paulistringtomatrix([PauliString(P.nqubits, P.term, 1.0)])
+             return real(tr(eta * P_mat))
+        end
+
+        val_eta = tr_eta_pauli(state_matrix, H_i)
+
+    # ---------------------------------------------------------
+    # ERROR HANDLING
+    # ---------------------------------------------------------
+    else
+        error("Matrix dimension $dim does not match N=$n. Expected size 2N=$(2*n) (BdG) or 2^N=$(2^n) (Exact).")
     end
 
-    val_eta = tr_eta_pauli(eta, H_i)
-
-    # 2. Get Expectation Value <P_i>_ρ
-    # getcoeff usually returns the projection, we multiply by 2^n to get the trace overlap
-    val_rho  = getcoeff(rho_theta, H_i) * 2^n
+    # ---------------------------------------------------------
+    # COMMON LOGIC: Calculate Rho part and Gradient
+    # ---------------------------------------------------------
+    val_rho = getcoeff(rho_theta, H_i) * 2^n
 
     if spin_scaling
         w = pauliweight(H_i)
-        scale = w == 1 ? 2 : w == 2 ? 4 : 1
+        scale = w == 1 ? 2.0 : (w == 2 ? 4.0 : 1.0)
         return (val_eta - val_rho) / scale
     else
         return val_eta - val_rho
@@ -106,11 +112,23 @@ function computegradients(H::Vector{<:PauliString}, eta::PauliSum, rho::PauliSum
     return grads
 end
 
-function computegradients(H::Vector{<:PauliString}, eta::AbstractMatrix, rho::PauliSum)
+"""
+Computes the gradient vector for a list of Pauli strings H.
+Automatic Detection:
+- If `state_matrix` has dimension 2*N, it uses efficient BdG/Wick's theorem (O(N^3)).
+- If `state_matrix` has dimension 2^N, it uses Exact Matrix Trace (Exponential cost).
+"""
+function computegradients(H::Vector{<:PauliString}, state_matrix::AbstractMatrix, rho::PauliSum)
+    # Pre-allocate the gradient vector
     grads = Vector{Float64}(undef, length(H))
+    
+    # Loop over all Hamiltonian terms
+    # Using @inbounds for slight performance gain since indices are safe
     @inbounds for (i, h) in enumerate(H)
-        grads[i] = computepartialderivative(h, eta, rho)
+        # The logic for BdG vs Exact is handled inside this function call:
+        grads[i] = computepartialderivative(h, state_matrix, rho)
     end
+    
     return grads
 end
 
