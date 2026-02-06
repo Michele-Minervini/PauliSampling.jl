@@ -34,7 +34,7 @@ end
 function apply_projector(psum, qind, x_k::Bool=false)
     # TODO: Make this a gate. 
     nq = psum.nqubits
-    new_psum = PauliSum(ComplexF64, nq)
+    new_psum = similar(psum)
     sgn = (-1)^(x_k)
     B = PauliString(nq, :Z, qind, sgn)
     for (term, coeff) in psum
@@ -42,7 +42,7 @@ function apply_projector(psum, qind, x_k::Bool=false)
         if ispauli(pauli, 1) | ispauli(pauli, 2) # X or Y
             continue # discard since |x><x|X|x><x| = 0 and |x><x|Y|x><x| = 0 for x in {0, 1}
         end
-        pstr = PauliString(nq, term, complex(coeff))
+        pstr = PauliString(nq, term, coeff)
         # |x><x| p |x><x| = (1/2)(I + B) * p * (1/2)(I + B) = (1/4) * (p + pB + Bp + BpB)
         # Can do better, since anything that isn't an I among p, pB, Bp, BpB can be discarded as 
         # it will always be 0 in future trace calculations. 

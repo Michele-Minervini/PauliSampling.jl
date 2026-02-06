@@ -48,7 +48,7 @@ function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real,
         # Evolution Rule: P -> cosh(θ)P - sinh(θ)PG
         new_pstr, phase = pauliprod(gate.generator_mask, pstr, gate.qinds)
 
-        # --- OPTIMIZATION START ---
+        # --- OPTIMIZATION for Sampling START ---
         # If we are in the final layer (prune_non_diagonal=true), check before we write!        
         if prune_non_diagonal
             # 1. Optimize Child: If the NEW term has X or Y, don't even calculate it.
@@ -58,7 +58,7 @@ function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real,
                 # But we MUST still process the parent branch below.
                 # So we just don't write to aux_psum.
             else
-                coeff2 = -1 * phase * coeff * sinh_val
+                coeff2 = -1 * real(phase) * coeff * sinh_val
                 set!(aux_psum, new_pstr, coeff2)
             end
 
@@ -76,11 +76,11 @@ function PauliPropagation.applytoall!(gate::ImaginaryPauliRotation, theta::Real,
             continue
         end
 
-        # --- OPTIMIZATION END ---
+        # --- OPTIMIZATION for Sampling END ---
 
         # Standard behavior (if not pruning)
         coeff1 = coeff * cosh_val
-        coeff2 = -1 * phase * coeff * sinh_val
+        coeff2 = -1 * real(phase) * coeff * sinh_val
 
         set!(psum, pstr, coeff1)
         set!(aux_psum, new_pstr, coeff2)
@@ -177,7 +177,17 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
 
     psum = PauliSum(CT, nq)
     add!(psum, PauliString(nq, :I, 1, 1))
-    wrapped_psum = wrapcoefficients(psum, PauliFreqTracker)
+
+    # Only wrap in PauliFreqTracker if we are actually using sine-based truncation.
+    # The tracker is not compatible with ForwardDiff.Dual, so we skip it during AD/Optimization.
+    # When training, max_sins is typically Inf anyway.
+    use_tracker = (max_sins < Inf)
+
+    if use_tracker
+        wrapped_psum = wrapcoefficients(psum, PauliFreqTracker)
+    else
+        wrapped_psum = psum
+    end
 
     for i in 1:num_layers
         # 1. OPTIMIZATION: Tell the propagator to avoid creating NEW junk in the final layer
@@ -193,8 +203,12 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
         )
     end
 
-    unwrapped_psum = unwrapcoefficients(wrapped_psum)
-    # Normalize c_I
+    if use_tracker
+        unwrapped_psum = unwrapcoefficients(wrapped_psum)
+    else
+        unwrapped_psum = wrapped_psum
+    end    # Normalize c_I
+
     mult!(unwrapped_psum, 1 / getcoeff(unwrapped_psum, :I, 1))
 
     # 2. SAFETY NET: The Final Sweep

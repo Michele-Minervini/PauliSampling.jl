@@ -185,7 +185,15 @@ Returns a vector of length 2^length(qinds).
 function compute_grouped_traces(psum, qinds)
     num_qinds = length(qinds)
     n_states = 1 << num_qinds # 2^num_qinds
-    coeffs = Vector{ComplexF64}(undef, n_states)
+
+    # 1. Infer numeric type T from psum. 
+    #    We check the Identity term (global) or default to ComplexF64.
+    #    This captures 'Complex{Dual}' if present.
+    val_I = getcoeff(psum, :I, 1) 
+    T = typeof(val_I)
+
+    # 2. Initialize Generic Vector
+    coeffs = Vector{T}(undef, n_states)
     
     # Pre-allocate buffer for constructing Z-strings
     # This replaces the need for `get_one_inds!`
@@ -229,7 +237,7 @@ end
 In-place Inverse Fast Walsh-Hadamard Transform.
 Converts Pauli coefficients -> State probabilities (unnormalized).
 """
-function naive_ifwht!(x::Vector{ComplexF64})
+function naive_ifwht!(x::AbstractVector)
     n = length(x)
     logn = trailing_zeros(n)
     @assert 2^logn == n "Length must be a power of 2"
@@ -252,4 +260,113 @@ function naive_ifwht!(x::Vector{ComplexF64})
     # but we keep it for numerical consistency with density matrix values.
     x ./= n 
     return x
+end
+
+
+"""
+    get_exact_prob(psum, bitstring::BitVector)
+
+Computes the exact Born probability p(x) = <x|rho|x> using the Diagonal Pauli Expansion.
+This is the 'theoretical' value without sampling noise or heuristic normalization.
+"""
+function get_exact_prob(psum, bitstring::BitVector)
+    nq = psum.nqubits
+    num_states = 1 << nq # 2^n
+    # Convert BitVector (Little Endian visual) to integer for index matching
+    # bitstring[nq] is Q1 (LSB), bitstring[1] is Qn (MSB)
+    sample_idx = 0
+    for q in 1:nq
+        if bitstring[nq + 1 - q]
+            sample_idx |= (UInt(1) << (q - 1))
+        end
+    end
+
+    # Use your existing FWHT logic to get all probabilities exactly
+    raw_probs = compute_grouped_traces(psum, 1:nq)
+    
+    # Return the real part of the probability for the specific index
+    # (The Born distribution is P(x) = real(<x|rho|x>))
+    return real(raw_probs[sample_idx + 1]) * num_states
+end
+
+"""
+    get_approx_prob(psum, bitstring::BitVector)
+
+Computes the heuristic probability p_hat(x) produced by the locally normalized 
+ancestral sampling procedure. This reflects the 'self-consistent' model.
+"""
+function get_approx_prob(psum, bitstring::BitVector)
+    nq = psum.nqubits
+    
+    # --- Pre-processing: Extract Diagonal Mask Data ---
+    sample_val = getcoeff(psum, :I, 1)
+    RT = typeof(real(sample_val))
+    term_coeffs = Vector{RT}()    
+    term_masks = Vector{UInt64}()
+    for (pstr, coeff) in psum
+        mask = UInt64(0)
+        is_diagonal = true
+        for i in 1:nq
+            p = getpauli(pstr, i)
+            if ispauli(p, 3) 
+                mask |= (UInt64(1) << (i - 1))
+            elseif ispauli(p, 1) || ispauli(p, 2)
+                is_diagonal = false; break
+            end
+        end
+        if is_diagonal && abs(real(coeff)) > 1e-15
+            push!(term_coeffs, real(coeff))
+            push!(term_masks, mask)
+        end
+    end
+
+    # --- Step-by-step Ancestral Probability Calculation ---
+    # P_hat(x) = P(x1) * P(x2|x1) * ... * P(xn|x1...xn-1)
+    total_prob = 1.0
+    history_mask = UInt64(0)
+    
+    for q in 1:nq
+        q_bit = UInt64(1) << (q - 1)
+        future_mask = ~((UInt64(1) << q) - 1) 
+        if q == nq; future_mask = UInt64(0); end
+
+        prob_unnorm_0 = 0.0
+        prob_unnorm_1 = 0.0
+        
+        for k in 1:length(term_coeffs)
+            mask = term_masks[k]
+            coeff = term_coeffs[k]
+            
+            # Trace out future qubits
+            if (mask & future_mask) != 0; continue; end
+            
+            past_overlap = mask & history_mask
+            parity_sign = (count_ones(past_overlap) % 2 == 0) ? 1.0 : -1.0
+            val = coeff * parity_sign
+            
+            if (mask & q_bit) == 0
+                prob_unnorm_0 += val; prob_unnorm_1 += val
+            else
+                prob_unnorm_0 += val; prob_unnorm_1 -= val
+            end
+        end
+        
+        # Local Normalization Logic (Algorithm 1)
+        # We take the absolute values to ensure positivity
+        p0_val = abs(prob_unnorm_0)
+        p1_val = abs(prob_unnorm_1)
+        denom = p0_val + p1_val
+        
+        target_bit = bitstring[nq + 1 - q]
+        if denom > 1e-15
+            step_prob = target_bit ? (p1_val / denom) : (p0_val / denom)
+        else
+            step_prob = 0.5 # Uniform fallback
+        end
+        
+        total_prob *= step_prob
+        if target_bit; history_mask |= q_bit; end
+    end
+    
+    return total_prob
 end
