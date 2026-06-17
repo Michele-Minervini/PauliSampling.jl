@@ -1,0 +1,25 @@
+# ── Leanest repo ────────────────────────────────────────────────────
+# Push ONLY the code + environment needed to rebuild and run on the cluster.
+# Everything is ignored by default; the essentials are re-included below.
+# (Notebooks, figures, paper, datasets, run outputs stay on disk locally —
+#  they are simply not pushed. To track something extra, add a `!` line.)
+
+/*
+
+# Essentials (re-included):
+!/.gitignore
+!/README.md
+!/Project.toml
+!/Manifest.toml
+!/src/
+!/test/
+!/cluster/
+# cluster run outputs (serialized) — kept out of git:
+/cluster/results/
+
+# Junk to drop even inside the tracked folders:
+.DS_Store
+*.swp
+.ipynb_checkpoints/
+*.cov
+gks*.png

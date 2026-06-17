@@ -451,3 +451,68 @@ function bdg_expectation(Gamma::AbstractMatrix, pauli_str::String)
         end
     end
 end
+
+
+# ------------------------------------------------------------------
+# RBM / PARTIAL TRACE UTILITIES
+# ------------------------------------------------------------------
+
+"""
+    marginalize(psum::PauliSum, n_visible::Int)
+
+Performs the partial trace over the hidden qubits (indices n_visible+1 to n_total).
+Returns a new PauliSum defined only on the visible qubits (1 to n_visible).
+"""
+function marginalize(psum::PauliSum, n_visible::Int)
+    n_total = psum.nqubits
+    n_hidden = n_total - n_visible
+    
+    # We will accumulate terms in a dictionary to merge duplicates automatically
+    # (e.g. Z_1 I_2 and Z_1 Z_2 might both map to Z_1 if we trace out qubit 2)
+    # However, for partial trace, we ONLY keep terms that are Identity on hidden units.
+    # So we don't need to merge; we just filter.
+    
+    visible_pstrs = Vector{PauliString}()
+    # The trace of I on m qubits is 2^m.
+    # In Pauli representation, Tr_B(P_A x I_B) = P_A * 2^m.
+    # We must scale coefficients by this factor to maintain normalization.
+    trace_factor = 2.0^n_hidden
+    
+    # Helper to reconstruct symbols from codes
+    # Assuming standard mapping: 1=>X, 2=>Y, 3=>Z, else I
+    function code_to_symbol(p_code)
+        if ispauli(p_code, 1); return :X
+        elseif ispauli(p_code, 2); return :Y
+        elseif ispauli(p_code, 3); return :Z
+        else; return :I
+        end
+    end
+
+    for (pstr, coeff) in psum
+        # 1. Check if Hidden Part is Identity
+        is_hidden_identity = true
+        for k in n_visible+1:n_total
+            p_code = getpauli(pstr, k)
+            # If not Identity (assuming ispauli checks 1,2,3 for X,Y,Z)
+            if ispauli(p_code, 1) || ispauli(p_code, 2) || ispauli(p_code, 3)
+                is_hidden_identity = false
+                break
+            end
+        end
+
+        # 2. If valid, extract visible part and rescale
+        if is_hidden_identity
+            # Construct new PauliString for visible qubits
+            syms = Vector{Symbol}(undef, n_visible)
+            for k in 1:n_visible
+                p_code = getpauli(pstr, k)
+                syms[k] = code_to_symbol(p_code)
+            end
+            
+            new_coeff = coeff * trace_factor
+            push!(visible_pstrs, PauliString(n_visible, syms, 1:n_visible, new_coeff))
+        end
+    end
+
+    return PauliSum(visible_pstrs)
+end

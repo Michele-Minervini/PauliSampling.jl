@@ -172,7 +172,7 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
     max_weight=Inf, 
     max_sins=Inf, 
     min_abs_coeff=1e-10,
-    optimize_for_z_basis::Bool = true # <--- New Argument: Master Switch
+    optimize_for_z_basis::Bool = false # <--- New Argument: Master Switch
 ) where {CT}
 
     psum = PauliSum(CT, nq)
@@ -278,7 +278,7 @@ function makethermalstate_matrix(H::AbstractMatrix{<:Number}, β::Real)
     end
 
     # 2. Eigendecomposition (Only ONCE)
-    vals, vecs = eigen(H_dense) # vals are the energy eigenvalues E_n
+    vals, vecs = eigen(Hermitian(H_dense)) # vals are the energy eigenvalues E_n
 
     # 3. Calculate Thermal Probabilities (Eigenvalues of ρ)
     # The eigenvalues of ρ are p_n = exp(-βE_n) / Z
@@ -297,4 +297,103 @@ function makethermalstate_matrix(H::AbstractMatrix{<:Number}, β::Real)
     ρ = vecs * Diagonal(probs) * vecs'
 
     return ρ, probs
+end
+
+#########
+
+function propagate_ite_with_stats!(
+    circ, psum, thetas=nothing; 
+    prune_at_final_step::Bool=false, 
+    max_weight=Inf, min_abs_coeff=1e-10, max_freq=Inf, max_sins=Inf,
+    customtruncfunc=nothing, normalization=false, kwargs...
+)
+    PauliPropagation._checkfreqandsinfields(psum, max_freq, max_sins)
+    circ, thetas = PauliPropagation._promotecircandthetas(circ, thetas)
+    PauliPropagation._checkcircandthetas(circ, thetas)
+
+    param_idx = thetas === nothing ? nothing : length(thetas)
+    aux_psum = similar(psum)
+    
+    pre_prune_count = 0
+    reversed_circ = reverse(circ)
+    len_circ = length(reversed_circ)
+
+    for (i, gate) in enumerate(reversed_circ)
+        is_last_gate = (i == len_circ)
+        do_prune = (prune_at_final_step && is_last_gate)
+
+        # CAPTURE POINT: Right before the last gate prunes XY terms
+        # This is the "Total Paulis before final pruning" your colleague wants.
+        if do_prune
+            pre_prune_count = length(psum)
+        end
+
+        psum, aux_psum, param_idx = applymergetruncate_ite!(
+            gate, psum, aux_psum, thetas, param_idx;
+            prune_non_diagonal=do_prune, 
+            max_weight=max_weight, min_abs_coeff=min_abs_coeff,
+            max_freq=max_freq, max_sins=max_sins,
+            customtruncfunc=customtruncfunc, normalization=normalization,
+            kwargs...
+        )
+    end
+
+    # Returns the modified psum and the count recorded at the start of the final gate
+    return psum, pre_prune_count
+end
+
+function makethermalstate_with_stats(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer; 
+    beta::Real = 1.0, 
+    max_weight=Inf, 
+    max_sins=Inf, 
+    min_abs_coeff=1e-10,
+    optimize_for_z_basis::Bool = true
+) where {CT}
+
+    psum = PauliSum(CT, nq)
+    add!(psum, PauliString(nq, :I, 1, 1))
+
+    use_tracker = (max_sins < Inf)
+    wrapped_psum = use_tracker ? wrapcoefficients(psum, PauliFreqTracker) : psum
+
+    total_paulis_before_prune = 0
+
+    for i in 1:num_layers
+        # Optimization only triggers in the final Trotter layer
+        should_prune = optimize_for_z_basis && (i == num_layers)
+
+        wrapped_psum, last_count = propagate_ite_with_stats!(
+            circuit, wrapped_psum, (beta / num_layers) * thetas; 
+            prune_at_final_step=should_prune,
+            max_weight=max_weight, max_sins=max_sins, 
+            min_abs_coeff=min_abs_coeff, normalization=true
+        )
+        
+        if should_prune
+            total_paulis_before_prune = last_count
+        end
+    end
+
+    unwrapped_psum = use_tracker ? unwrapcoefficients(wrapped_psum) : wrapped_psum
+    mult!(unwrapped_psum, 1 / getcoeff(unwrapped_psum, :I, 1))
+
+    # Final filter to ensure purity and handle small numerical noise
+    filter!(unwrapped_psum) do p_int, coeff
+        if abs(coeff) <= 1e-15
+            return false
+        end
+        if optimize_for_z_basis
+            if PauliPropagation.containsXorY(p_int)
+                return false
+            end
+        end
+        return true
+    end
+
+    # Final Normalization to get density matrix traces
+    final_diagonal_count = length(unwrapped_psum)
+    mult!(unwrapped_psum, 1 / 2.0^nq)
+
+    # Return the state and the stats as requested for the x-axis analysis
+    return unwrapped_psum, (before=total_paulis_before_prune, after=final_diagonal_count)
 end

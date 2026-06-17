@@ -2,16 +2,23 @@ using Random
 
 # :exact - Uses FWHT for global normalization (slow for large $N$, exponentially precise).
 # :approx - Uses the new Mask-Based Ancestral Sampling (orders of magnitude faster)
-function sample_bitstring(psum; prob_method::Symbol = :approx)
+function sample_bitstring(psum; prob_method::Symbol = :approx, basis::Symbol = :Z)
     nq = psum.nqubits
     
+    # --- 1. Rotate the state to the target measurement basis ---
+    rotated_psum = psum
+    if basis != :Z
+        basis_circuit = get_basis_circuit(nq, basis)
+        rotated_psum = propagate(basis_circuit, psum)
+    end
+
     # --- Method :exact (Global L1-normalized sampling) ---
     if prob_method == :exact
         # 1. Compute the full diagonal vector <x|rho|x> for all x
         #    This uses FWHT to get all 2^N amplitudes simultaneously.
         #    Note: raw_probs[k] corresponds to integer index k-1 (0-based)
         #    where Qubit 1 is the Least Significant Bit (LSB).
-        raw_probs = compute_grouped_traces(psum, 1:nq)
+        raw_probs = compute_grouped_traces(rotated_psum, 1:nq)
         
         # 2. Apply the L1-normalization logic: P(x) = |raw(x)| / sum(|raw|)
         total_norm = sum(abs, raw_probs)
@@ -54,7 +61,7 @@ function sample_bitstring(psum; prob_method::Symbol = :approx)
         term_coeffs = Float64[]
         term_masks = Vector{UInt64}() # Supports up to 64 qubits
         
-        for (pstr, coeff) in psum
+        for (pstr, coeff) in rotated_psum
             mask = UInt64(0)
             is_diagonal = true
             
@@ -140,6 +147,128 @@ function sample_bitstring(psum; prob_method::Symbol = :approx)
 
     else
         error("Unknown prob_method: $prob_method. Use :exact or :approx.")
+    end
+end
+
+# =========================================================
+# FAST BULK SAMPLER
+# =========================================================
+function sample_bitstrings(psum, num_samples::Int; prob_method::Symbol = :approx, basis::Symbol = :Z)
+    nq = psum.nqubits
+    
+    # --- 1. DO THIS ONLY ONCE: Rotate State ---
+    rotated_psum = psum
+    if basis != :Z
+        basis_circuit = get_basis_circuit(nq, basis)
+        rotated_psum = propagate(basis_circuit, psum)
+    end
+
+    if prob_method == :approx
+        # --- 2. DO THIS ONLY ONCE: Pre-process Integer Masks ---
+        term_coeffs = Float64[]
+        term_masks = UInt64[] 
+        
+        for (pstr, coeff) in rotated_psum
+            mask = UInt64(0)
+            is_diagonal = true
+            
+            for i in 1:nq
+                p = getpauli(pstr, i)
+                if ispauli(p, 3) 
+                    mask |= (UInt64(1) << (i - 1))
+                elseif ispauli(p, 1) || ispauli(p, 2)
+                    is_diagonal = false
+                    break
+                end
+            end
+            
+            if is_diagonal && abs(real(coeff)) > 1e-15
+                push!(term_coeffs, real(coeff))
+                push!(term_masks, mask)
+            end
+        end
+        
+        n_terms = length(term_coeffs)
+        results = Vector{BitVector}(undef, num_samples)
+        
+        # --- 3. SAMPLING LOOP (Pure bitwise math, perfectly parallel) ---
+        Threads.@threads for s in 1:num_samples
+            bitstring = BitVector(undef, nq)
+            history_mask = UInt64(0) 
+            
+            for q in 1:nq
+                q_bit = UInt64(1) << (q - 1)
+                future_mask = q == nq ? UInt64(0) : ~((UInt64(1) << q) - 1) 
+
+                prob_unnorm_0 = 0.0
+                prob_unnorm_1 = 0.0
+                
+                for k in 1:n_terms
+                    mask = term_masks[k]
+                    
+                    if (mask & future_mask) != 0
+                        continue
+                    end
+                    
+                    past_overlap = mask & history_mask
+                    parity_sign = (count_ones(past_overlap) % 2 == 0) ? 1.0 : -1.0
+                    
+                    val = term_coeffs[k] * parity_sign
+                    
+                    if (mask & q_bit) == 0
+                        prob_unnorm_0 += val
+                        prob_unnorm_1 += val
+                    else
+                        prob_unnorm_0 += val
+                        prob_unnorm_1 -= val
+                    end
+                end
+                
+                denom = prob_unnorm_0 + prob_unnorm_1
+                p0 = 0.5 
+                if abs(denom) > 1e-15
+                    p0 = clamp(prob_unnorm_0 / denom, 0.0, 1.0)
+                end
+                
+                if rand() <= p0
+                    bitstring[nq+1-q] = false
+                else
+                    bitstring[nq+1-q] = true
+                    history_mask |= q_bit
+                end
+            end
+            results[s] = bitstring
+        end
+        
+        return results
+
+    elseif prob_method == :exact
+        # Do FWHT exactly ONCE
+        raw_probs = compute_grouped_traces(rotated_psum, 1:nq)
+        total_norm = sum(abs, raw_probs)
+        if total_norm == 0 error("State has zero norm") end
+        
+        # Build CDF ONCE
+        cdf = zeros(Float64, length(raw_probs))
+        cumulative = 0.0
+        for i in 1:length(raw_probs)
+            cumulative += abs(raw_probs[i])
+            cdf[i] = cumulative / total_norm
+        end
+        
+        results = Vector{BitVector}(undef, num_samples)
+        Threads.@threads for s in 1:num_samples
+            target = rand()
+            # Fast binary search
+            sample_idx = searchsortedfirst(cdf, target) - 1
+            
+            bitstring = BitVector(undef, nq)
+            for q in 1:nq
+                bitstring[nq + 1 - q] = (sample_idx >> (q - 1)) & 1 == 1
+            end
+            results[s] = bitstring
+        end
+        return results
     end
 end
 
@@ -269,11 +398,20 @@ end
 Computes the exact Born probability p(x) = <x|rho|x> using the Diagonal Pauli Expansion.
 This is the 'theoretical' value without sampling noise or heuristic normalization.
 """
-function get_exact_prob(psum, bitstring::BitVector)
+function get_exact_prob(psum, bitstring::BitVector; basis::Symbol = :Z)
     nq = psum.nqubits
-    num_states = 1 << nq # 2^n
-    # Convert BitVector (Little Endian visual) to integer for index matching
+    
+    # 1. Apply basis rotation using PauliPropagation.propagate
+    # The 'propagate' function evolves the PauliSum through the gates.
+    rotated_psum = psum
+    if basis != :Z
+        basis_circuit = get_basis_circuit(nq, basis)
+        rotated_psum = propagate(basis_circuit, psum)
+    end
+    
+    # 2. Convert BitVector (Little Endian visual) to integer for index matching
     # bitstring[nq] is Q1 (LSB), bitstring[1] is Qn (MSB)
+    num_states = 1 << nq 
     sample_idx = 0
     for q in 1:nq
         if bitstring[nq + 1 - q]
@@ -281,92 +419,178 @@ function get_exact_prob(psum, bitstring::BitVector)
         end
     end
 
-    # Use your existing FWHT logic to get all probabilities exactly
-    raw_probs = compute_grouped_traces(psum, 1:nq)
-    
-    # Return the real part of the probability for the specific index
-    # (The Born distribution is P(x) = real(<x|rho|x>))
+    # 3. Compute traces on the rotated state with FWHT logic to get all probabilities exactly
+    raw_probs = compute_grouped_traces(rotated_psum, 1:nq)
     return real(raw_probs[sample_idx + 1]) * num_states
 end
 
 """
-    get_approx_prob(psum, bitstring::BitVector)
+    get_approx_prob(psum, bitstring::BitVector; basis::Symbol = :Z)
 
 Computes the heuristic probability p_hat(x) produced by the locally normalized 
-ancestral sampling procedure. This reflects the 'self-consistent' model.
+ancestral sampling procedure (Algorithm 1) in the specified basis (:X, :Y, or :Z).
 """
-function get_approx_prob(psum, bitstring::BitVector)
+function get_approx_prob(psum, bitstring::BitVector; basis::Symbol = :Z)
     nq = psum.nqubits
-    
-    # --- Pre-processing: Extract Diagonal Mask Data ---
+
+    # 1. Rotate the state to the target measurement basis using PauliPropagation
+    rotated_psum = psum
+    if basis != :Z
+        basis_circuit = get_basis_circuit(nq, basis)
+        # Use the built-in propagate function from PauliPropagation.jl
+        rotated_psum = propagate(basis_circuit, psum)
+    end
+
+    # 2. Extract the diagonal terms once, then run Algorithm 1 for this bitstring.
+    term_coeffs, term_masks = extract_diagonal_terms(rotated_psum)
+    return approx_prob_from_terms(term_coeffs, term_masks, nq, bitstring)
+end
+
+"""
+    extract_diagonal_terms(psum) -> (term_coeffs, term_masks)
+
+Pull the computational-basis-diagonal Pauli terms (Identity / Z-strings) out of
+`psum`: their real coefficients and their Z-support bitmasks. This is independent
+of any bitstring, so when scoring MANY bitstrings against the same state, extract
+ONCE and reuse the result via [`approx_prob_from_terms`] — far cheaper than
+re-extracting per bitstring (and especially under ForwardDiff, where this is where
+the `Dual` coefficients get pulled out). The coefficient eltype is generic, so
+`Dual` numbers flow through for automatic differentiation.
+"""
+function extract_diagonal_terms(psum)
+    nq = psum.nqubits
     sample_val = getcoeff(psum, :I, 1)
     RT = typeof(real(sample_val))
-    term_coeffs = Vector{RT}()    
+    term_coeffs = Vector{RT}()
     term_masks = Vector{UInt64}()
+
     for (pstr, coeff) in psum
         mask = UInt64(0)
         is_diagonal = true
         for i in 1:nq
             p = getpauli(pstr, i)
-            if ispauli(p, 3) 
+            if ispauli(p, 3) # Z component
                 mask |= (UInt64(1) << (i - 1))
-            elseif ispauli(p, 1) || ispauli(p, 2)
+            elseif ispauli(p, 1) || ispauli(p, 2) # X or Y components are non-diagonal
                 is_diagonal = false; break
             end
         end
+        # Only keep diagonal terms (Identity and Z-strings)
         if is_diagonal && abs(real(coeff)) > 1e-15
             push!(term_coeffs, real(coeff))
             push!(term_masks, mask)
         end
     end
 
-    # --- Step-by-step Ancestral Probability Calculation ---
-    # P_hat(x) = P(x1) * P(x2|x1) * ... * P(xn|x1...xn-1)
-    total_prob = 1.0
+    return term_coeffs, term_masks
+end
+
+"""
+    approx_prob_from_terms(term_coeffs, term_masks, nq, bitstring) -> p_hat(x)
+
+Algorithm-1 (ancestral) probability of `bitstring`, given the diagonal terms from
+[`extract_diagonal_terms`]. Accumulators are initialized at the coefficient type
+(`one(RT)` / `zero(RT)`) so the inner loop stays type-stable under
+ForwardDiff.Dual — a plain `0.0`/`1.0` start would force a Float64->Dual promotion
+mid-loop, which is markedly slower under AD. Numerically identical to the inlined
+version that used to live in `get_approx_prob`.
+"""
+function approx_prob_from_terms(term_coeffs::Vector{RT}, term_masks::Vector{UInt64},
+                                nq::Integer, bitstring::BitVector) where {RT}
+    total_prob = one(RT)
     history_mask = UInt64(0)
-    
+
     for q in 1:nq
         q_bit = UInt64(1) << (q - 1)
-        future_mask = ~((UInt64(1) << q) - 1) 
+        # Future bits are traced out by ignoring terms with support on qubits > q
+        future_mask = ~((UInt64(1) << q) - 1)
         if q == nq; future_mask = UInt64(0); end
 
-        prob_unnorm_0 = 0.0
-        prob_unnorm_1 = 0.0
-        
+        prob_unnorm_0 = zero(RT)
+        prob_unnorm_1 = zero(RT)
+
         for k in 1:length(term_coeffs)
             mask = term_masks[k]
             coeff = term_coeffs[k]
-            
+
             # Trace out future qubits
             if (mask & future_mask) != 0; continue; end
-            
+
+            # Parity check from previously sampled bits (Equation 15 in Draft Paper)
             past_overlap = mask & history_mask
             parity_sign = (count_ones(past_overlap) % 2 == 0) ? 1.0 : -1.0
             val = coeff * parity_sign
-            
+
             if (mask & q_bit) == 0
+                # Identity on current qubit q
                 prob_unnorm_0 += val; prob_unnorm_1 += val
             else
+                # Z operator on current qubit q
                 prob_unnorm_0 += val; prob_unnorm_1 -= val
             end
         end
-        
-        # Local Normalization Logic (Algorithm 1)
-        # We take the absolute values to ensure positivity
+
+        # 4. Local Normalization Logic
+        # We use absolute values to ensure a valid probability even if the state is non-positive
         p0_val = abs(prob_unnorm_0)
         p1_val = abs(prob_unnorm_1)
         denom = p0_val + p1_val
-        
+
         target_bit = bitstring[nq + 1 - q]
         if denom > 1e-15
             step_prob = target_bit ? (p1_val / denom) : (p0_val / denom)
         else
-            step_prob = 0.5 # Uniform fallback
+            step_prob = RT(0.5) # Fallback to uniform for zero-norm branches
         end
-        
+
         total_prob *= step_prob
         if target_bit; history_mask |= q_bit; end
     end
-    
+
     return total_prob
+end
+
+"""
+    get_rbm_prob(rho::PauliSum, v::BitVector, n_visible::Int; method=:exact)
+
+Computes the marginal probability P(v) = Tr[(|v><v| x I) rho] for an RBM.
+"""
+function get_rbm_prob(rho::PauliSum, v::BitVector, n_visible::Int; method=:exact)
+    # 1. Marginalize: ρ_vis = Tr_h[ρ]
+    rho_vis = marginalize(rho, n_visible)
+    
+    # 2. Compute probability on the visible state
+    if method == :exact
+        return get_exact_prob(rho_vis, v)
+    elseif method == :approx
+        return get_approx_prob(rho_vis, v)
+    else
+        error("Unknown method $method")
+    end
+end
+
+
+"""
+    get_basis_circuit(nq::Int, basis::Symbol)
+
+Returns a list of CliffordGate objects to rotate all qubits to the target basis.
+"""
+function get_basis_circuit(nq::Int, basis::Symbol)
+    circuit = CliffordGate[]
+    if basis == :X
+        # To measure X, apply H to all qubits
+        for i in 1:nq
+            push!(circuit, CliffordGate(:H, i))
+        end
+    elseif basis == :Y
+        # To measure Y, apply S† then H to all qubits
+        # Note: Since H S† is the preparation, the Heisenberg adjoint 
+        # is (H S†)† = S H. In PauliPropagation, we just apply the 
+        # sequence that maps Y -> Z.
+        for i in 1:nq
+            push!(circuit, CliffordGate(:H, i)) # Note: library might use :S for S† 
+            push!(circuit, CliffordGate(:S, i)) # check your specific clifford_map
+        end
+    end
+    return circuit
 end
