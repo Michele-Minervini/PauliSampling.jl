@@ -25,7 +25,8 @@ function train_qbm(rows::Int, cols::Int;
         digit::Int = 1, n_per_class::Int = 1000, model::Symbol = :tfim_tilted,
         beta::Float64 = 2.0, min_abs_coeff::Float64 = 1e-2, num_layers::Int = 1,
         nsteps::Int = 150, lr0::Float64 = 0.05, lr1::Float64 = 0.015,
-        seed::Int = 7, Htemplate = nothing, gradient_fn = ad_gradient, verbose::Bool = true)
+        seed::Int = 7, init::Symbol = :randn, Htemplate = nothing,
+        gradient_fn = ad_gradient, verbose::Bool = true)
     nq = rows * cols
     ds = generate_mnist_dataset(rows, cols; digit_classes=[digit], n_per_class=n_per_class,
                                 binarize_method=:adaptive, seed=1)
@@ -41,7 +42,13 @@ function train_qbm(rows::Int, cols::Int;
     # cosine LR from lr0 -> lr1 over nsteps
     cos_lr(s) = lr1 + 0.5 * (lr0 - lr1) * (1 + cos(pi * (s - 1) / max(nsteps - 1, 1)))
 
-    theta = [h.coeff for h in H]
+    # init = :randn → the template's random coefficients (default; safe at all sizes).
+    #        :data  → data-driven (mean-field) start: ~10× lower starting KL and a better
+    #                 fit at SMALL sizes (3×3/4×4), but the cold start can blow up the
+    #                 truncated operator at ≥5×5 — use only at small sizes (see data_init).
+    theta = init === :data  ? data_init(H, supp, probs, nq; beta=beta, rng=MersenneTwister(seed)) :
+            init === :randn ? [h.coeff for h in H] :
+            error("unknown init=$(init) (use :data or :randn)")
     adam = AdamState(K)
     kls = Float64[]; best = Inf; btheta = copy(theta)
     gradient_fn(lf, theta)   # warm / compile the chosen gradient

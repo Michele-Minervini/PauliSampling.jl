@@ -71,3 +71,53 @@ vectors flow through unchanged — this is what makes exact AD (`ad_gradient`) p
 """
 h_from_flat(theta::AbstractVector, H_template::Vector{<:PauliString}) =
     [PauliString(h.nqubits, h.term, theta[i]) for (i, h) in enumerate(H_template)]
+
+"""
+    data_init(H, supp, probs, nq; beta=2.0, coupling_scale=1.0, rng=Random.default_rng()) -> theta
+
+Data-driven initialization of the coefficients for template `H`, from the empirical
+distribution (`supp`, `probs`) — a classical mean-field starting point:
+  • 1-body Zᵢ field        →  θ_i  = atanh(-⟨z_i⟩)/β          (single-spin marginal match)
+  • 2-body ZᵢZⱼ coupling   →  θ_ij = -coupling_scale·cov(z_i,z_j)/β   (favor observed correlation)
+  • transverse (X/Y) or higher-order terms → small random   (no classical analog)
+where z = +1 for bit 0, -1 for bit 1. Validated to start ~10× lower in support-KL than
+`randn` and to reach a better fit at SMALL sizes (3×3 & 4×4 MNIST, digit 1).
+Use via `train_qbm(...; init=:data)`.
+
+WARNING — small sizes only: a peaked target gives large field angles, so the start is
+very "cold". At ≥5×5 this can blow up the truncated operator (very slow / effectively
+hangs) under the absolute `min_abs_coeff` truncation. Use `init=:randn` for ≥5×5 (a
+milder / β-annealed data start would be needed to make this cluster-safe).
+"""
+function data_init(H, supp::Vector{BitVector}, probs::Vector{Float64}, nq::Int;
+        beta::Real = 2.0, coupling_scale::Real = 1.0, rng = Random.default_rng())
+    zmean = zeros(nq); zz = zeros(nq, nq)              # z = +1 if bit 0, -1 if bit 1
+    for (x, p) in zip(supp, probs)
+        z = [x[i] ? -1.0 : 1.0 for i in 1:nq]
+        for i in 1:nq
+            zmean[i] += p * z[i]
+            for j in 1:nq; zz[i, j] += p * z[i] * z[j]; end
+        end
+    end
+    theta = zeros(length(H))
+    @inbounds for (k, h) in enumerate(H)
+        zq = Int[]; nonZ = false
+        for q in 1:nq
+            op = Int(getpauli(h.term, q))
+            op == 3 && push!(zq, q)
+            (op == 1 || op == 2) && (nonZ = true)
+        end
+        if nonZ
+            theta[k] = 0.05 * randn(rng)                                  # transverse: no classical analog
+        elseif length(zq) == 1
+            zi = clamp(zmean[zq[1]], -0.999, 0.999)
+            theta[k] = atanh(-zi) / beta                                  # field ← marginal
+        elseif length(zq) == 2
+            i, j = zq
+            theta[k] = -coupling_scale * (zz[i, j] - zmean[i] * zmean[j]) / beta   # coupling ← correlation
+        else
+            theta[k] = 0.05 * randn(rng)                                  # higher-order: no simple analog
+        end
+    end
+    return theta
+end

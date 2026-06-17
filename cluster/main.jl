@@ -52,7 +52,7 @@ function main(ARGS)
     println("="^72)
     @printf "QBM cluster run | %d×%d (n=%d) digit=%d\n" s.rows s.cols nq s.digit
     @printf "  swept:  min_abs_coeff=%.0e  max_weight=%d  neighbor_distance=%d\n" min_abs_coeff max_weight neighbor_distance
-    @printf "  fixed:  beta=%.2f  num_layers=%d  max_order=%d  nsteps=%d  gradient=%s  seed=%d\n" s.beta s.num_layers s.max_order nsteps s.gradient s.seed
+    @printf "  fixed:  beta=%.2f  num_layers=%d  max_order=%d  nsteps=%d  gradient=%s  init=%s  seed=%d\n" s.beta s.num_layers s.max_order nsteps s.gradient s.init s.seed
     @printf "  threads=%d  BLAS=%d\n  save -> %s\n" Threads.nthreads() LinearAlgebra.BLAS.get_num_threads() savename
     println("="^72); flush(stdout)
 
@@ -76,7 +76,9 @@ function main(ARGS)
              error("unknown gradient $(s.gradient) — use :ad, :spsa, or :fd")
 
     # ── training loop: record EVERYTHING per iteration, serialize incrementally ──
-    theta = [h.coeff for h in H]
+    theta = s.init === :data  ? data_init(H, supp, probs, nq; beta=s.beta, rng=MersenneTwister(s.seed)) :
+            s.init === :randn ? [h.coeff for h in H] :
+            error("unknown init=$(s.init) (use :data or :randn)")
     adam  = AdamState(K)
     cos_lr(t) = s.lr1 + 0.5 * (s.lr0 - s.lr1) * (1 + cos(pi * (t - 1) / max(nsteps - 1, 1)))
 

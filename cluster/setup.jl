@@ -19,5 +19,6 @@ function getsetup()
         lr1         = 0.015,  # cosine learning-rate schedule: end
         seed        = 7,      # Hamiltonian-initialization seed
         gradient    = :ad,    # :ad (exact, default) | :spsa (cheap/noisy) | :fd
+        init        = :randn, # :randn (safe at all sizes, default) | :data (data-driven; great at 3×3/4×4 but the cold start can explode the operator at ≥5×5)
     )
 end

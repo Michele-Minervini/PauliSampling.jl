@@ -94,8 +94,8 @@ export
     # data
     generate_mnist_dataset, extract_support,
     downsample_image, binarize_image, image_to_bitvector, bitvector_to_image,
-    # model templates + thermal state
-    build_h_template, build_h_general, prepare_thermal_state, h_from_flat,
+    # model templates + thermal state + initialization
+    build_h_template, build_h_general, prepare_thermal_state, h_from_flat, data_init,
     # loss
     model_prob, kl_support,
     # optimizer + gradient estimators (interchangeable: (loss_fn, theta) -> (grad, loss))
