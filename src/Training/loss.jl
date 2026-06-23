@@ -12,14 +12,20 @@ Algorithm-1 (ancestral) probability of bitstring `x` under the thermal state `rh
 model_prob(rho, x::BitVector) = get_approx_prob(rho, reverse(x))
 
 """
-    extract_support(dataset) -> (supp, probs)
+    extract_support(dataset; min_count=1) -> (supp, probs)
 
-Empirical support of a `Vector{BitVector}`: the distinct patterns and their frequencies.
+Distinct patterns and their renormalized empirical frequencies. Patterns seen fewer than
+`min_count` times are dropped before renormalizing (`min_count=1` keeps everything).
 """
-function extract_support(dataset::Vector{BitVector})
+function extract_support(dataset::Vector{BitVector}; min_count::Int = 1)
     counts = Dict{BitVector, Int}()
     for x in dataset; counts[x] = get(counts, x, 0) + 1; end
-    supp = collect(keys(counts)); probs = Float64[counts[x] / length(dataset) for x in supp]
+    supp = BitVector[]; kept = Int[]
+    for (x, c) in counts
+        c >= min_count && (push!(supp, x); push!(kept, c))
+    end
+    total = sum(kept)
+    probs = Float64[c / total for c in kept]
     return supp, probs
 end
 

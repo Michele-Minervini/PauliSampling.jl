@@ -73,24 +73,34 @@ h_from_flat(theta::AbstractVector, H_template::Vector{<:PauliString}) =
     [PauliString(h.nqubits, h.term, theta[i]) for (i, h) in enumerate(H_template)]
 
 """
-    data_init(H, supp, probs, nq; beta=2.0, coupling_scale=1.0, rng=Random.default_rng()) -> theta
+    data_init(H, supp, probs, nq; beta=2.0, coupling_scale=1.0,
+              field_mode=:data, clampval=0.999, alpha=1.0, rng=Random.default_rng()) -> theta
 
 Data-driven initialization of the coefficients for template `H`, from the empirical
 distribution (`supp`, `probs`) — a classical mean-field starting point:
-  • 1-body Zᵢ field        →  θ_i  = atanh(-⟨z_i⟩)/β          (single-spin marginal match)
-  • 2-body ZᵢZⱼ coupling   →  θ_ij = -coupling_scale·cov(z_i,z_j)/β   (favor observed correlation)
-  • transverse (X/Y) or higher-order terms → small random   (no classical analog)
-where z = +1 for bit 0, -1 for bit 1. Validated to start ~10× lower in support-KL than
-`randn` and to reach a better fit at SMALL sizes (3×3 & 4×4 MNIST, digit 1).
-Use via `train_qbm(...; init=:data)`.
+  • 1-body Zᵢ field        →  θ_i  = α·atanh(-clamp(⟨z_i⟩,±clampval))/β   (marginal match)
+  • 2-body ZᵢZⱼ coupling   →  θ_ij = -α·coupling_scale·cov(z_i,z_j)/β       (observed correlation)
+  • transverse (X/Y) or higher-order terms → small random                  (no classical analog)
+where z = +1 for bit 0, -1 for bit 1.
 
-WARNING — small sizes only: a peaked target gives large field angles, so the start is
-very "cold". At ≥5×5 this can blow up the truncated operator (very slow / effectively
-hangs) under the absolute `min_abs_coeff` truncation. Use `init=:randn` for ≥5×5 (a
-milder / β-annealed data start would be needed to make this cluster-safe).
+Knobs that TAME the cold start. (Empirically the FIELDS are both the explosion source —
+βθ_i = atanh(-⟨z_i⟩) → ±∞ for always-on/off pixels — *and* the fidelity source; the
+couplings are bounded |θ_ij|≤1/β and mainly add training stability.)
+  • `field_mode=:random` → warm random fields instead of marginals (couplings stay
+                           data-driven). Warm/stable but low fidelity (fields carry the signal).
+  • `clampval<0.999`     → cap the divergent extreme-pixel fields (warmer; the explosion source).
+  • `alpha<1`            → scale the whole data-derived θ down (warmer).
+
+Defaults reproduce the FULL mean-field init: ~10× lower starting support-KL than `randn`
+and the best fit at SMALL sizes (3×3/4×4), but COLD → blows up the truncated operator at
+≥5×5. For the cluster use a *warm-directed* start
+(`train_qbm(...; init=:data_warm, init_clamp=…, init_alpha=…)`), lowering clamp/α until the
+init is feasible. See [`train_qbm`].
 """
 function data_init(H, supp::Vector{BitVector}, probs::Vector{Float64}, nq::Int;
-        beta::Real = 2.0, coupling_scale::Real = 1.0, rng = Random.default_rng())
+        beta::Real = 2.0, coupling_scale::Real = 1.0,
+        field_mode::Symbol = :data, clampval::Real = 0.999, alpha::Real = 1.0,
+        rng = Random.default_rng())
     zmean = zeros(nq); zz = zeros(nq, nq)              # z = +1 if bit 0, -1 if bit 1
     for (x, p) in zip(supp, probs)
         z = [x[i] ? -1.0 : 1.0 for i in 1:nq]
@@ -110,11 +120,15 @@ function data_init(H, supp::Vector{BitVector}, probs::Vector{Float64}, nq::Int;
         if nonZ
             theta[k] = 0.05 * randn(rng)                                  # transverse: no classical analog
         elseif length(zq) == 1
-            zi = clamp(zmean[zq[1]], -0.999, 0.999)
-            theta[k] = atanh(-zi) / beta                                  # field ← marginal
+            if field_mode === :random
+                theta[k] = 0.1 * randn(rng)                               # warm random field (coupling-only init)
+            else
+                zi = clamp(zmean[zq[1]], -clampval, clampval)
+                theta[k] = alpha * atanh(-zi) / beta                      # field ← marginal (clamped & α-scaled)
+            end
         elseif length(zq) == 2
             i, j = zq
-            theta[k] = -coupling_scale * (zz[i, j] - zmean[i] * zmean[j]) / beta   # coupling ← correlation
+            theta[k] = alpha * (-coupling_scale * (zz[i, j] - zmean[i] * zmean[j]) / beta)   # coupling ← correlation
         else
             theta[k] = 0.05 * randn(rng)                                  # higher-order: no simple analog
         end

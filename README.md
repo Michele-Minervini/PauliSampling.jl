@@ -40,7 +40,7 @@ res = train_qbm(5, 5; digit=1, nsteps=150)    # 5×5 MNIST, exact AD gradient (d
 | `num_layers` | ITE layers |
 | `nsteps`, `lr0`, `lr1` | Adam steps + cosine learning-rate schedule |
 | `gradient_fn` | `ad_gradient` (exact, default) · `spsa_gradient` · `forward_fd_gradient_spawn` |
-| `init` | `:randn` (**default**, safe at all sizes) · `:data` (data-driven: fields←pixel marginals, ZZ←pixel correlations; ~10× lower starting KL & better fit at small sizes 3×3/4×4 — but the cold start can blow up the truncated operator at ≥5×5) |
+| `init` (+ `init_clamp`, `init_alpha`) | parameter initialization. `:randn` (**default**, warm/safe at all sizes, but high-variance at ≥4×4) · `:data` (full mean-field: fields←pixel marginals, ZZ←pixel correlations; best at 3×3/4×4 but COLD → operator blow-up at ≥5×5) · `:data_warm` (cluster-safe: fields **clamped** `init_clamp` & **scaled** `init_alpha` + data couplings — lower clamp/α = warmer/safer) · `:data_coupling` (random fields + data couplings: warm & stable, modest gain over `:randn`) |
 | `Htemplate=build_h_general(r, c; max_distance, max_order)` | tunable connectivity: **`max_distance`** = neighbor_distance (1 = nearest-neighbor → diameter = all-to-all), **`max_order`** = interaction order (2-body, 3-body, …) |
 
 Threading: launch with `--threads=N` (the AD gradient parallelizes over chunks);
