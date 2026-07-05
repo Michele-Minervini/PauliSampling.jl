@@ -3,7 +3,7 @@ module PauliSampling
 using Base.Threads
 
 using PauliPropagation
-using F2Algebra
+# using F2Algebra
 using Hadamard
 using Combinatorics
 using BenchmarkTools
