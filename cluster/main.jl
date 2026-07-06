@@ -5,7 +5,10 @@
 include(joinpath(@__DIR__, "setup.jl"))
 using PauliSampling
 using Serialization, Random, Printf, LinearAlgebra
-using Base.Threads 
+using Base.Threads
+using Plots
+
+const IMAGES_PER_EPOCH = 100
 
 function main(ARGS)
     LinearAlgebra.BLAS.set_num_threads(1)
@@ -25,6 +28,9 @@ function main(ARGS)
     savedir  = joinpath(@__DIR__, "results"); mkpath(savedir)
     savename = joinpath(savedir, @sprintf("qbm_%dx%d_digit%d_d%d_o%d_mac%.0e_mw%d_beta%.1f_%s",
         s.rows, s.cols, s.digit, neighbor_distance, s.max_order, min_abs_coeff, max_weight, s.beta, s.gradient))
+
+    imgdir = joinpath(@__DIR__, "images", join(ARGS, "_"))
+    rm(imgdir; force=true, recursive=true); mkpath(imgdir)
 
     ds = generate_mnist_dataset(s.rows, s.cols; digit_classes=[s.digit], n_per_class=s.n_per_class,
                                 binarize_method=:adaptive, seed=1)
@@ -73,6 +79,15 @@ function main(ARGS)
         l   = kl_support(rho, supp, probs)
         np  = length(rho)
         gn  = sqrt(sum(abs2, g))
+
+        epochdir = joinpath(imgdir, "epoch$t")
+        mkpath(epochdir)
+        samples  = sample_bitstrings(rho, IMAGES_PER_EPOCH)
+        for (i, bv) in enumerate(samples)
+            img = bitvector_to_image(reverse(bv), s.rows, s.cols)
+            savefig(heatmap(img; yflip=true, color=:grays, aspect_ratio=:equal, axis=false, colorbar=false),
+                    joinpath(epochdir, "$i.pdf"))
+        end
         push!(losses, l); push!(params, copy(theta)); push!(paulis, np); push!(times, dt.time); push!(grad_norms, gn)
         l < best_loss && (best_loss = l; copyto!(best_theta, theta))
         @printf("step %4d/%d | loss=%.5f | paulis=%d | |g|=%.3f | %.2fs\n", t, nsteps, l, np, gn, dt.time)
