@@ -37,7 +37,7 @@ function main(ARGS)
     loss(θ)  = kl_support(mkrho(θ), supp, probs)
 
     rng = MersenneTwister(s.seed)
-    gradfn = s.gradient === :ad   ? (l, θ) -> ad_gradient(l, θ) :
+    gradfn = s.gradient === :ad   ? (l, θ) -> ad_gradient(l, θ; max_parallel=s.max_parallel) :
              s.gradient === :ad_serial   ? (l, θ) -> ad_gradient_serial(l, θ) :
              s.gradient === :spsa ? (l, θ) -> spsa_gradient(l, θ; rng=rng) :
              s.gradient === :fd   ? (l, θ) -> forward_fd_gradient_spawn(l, θ) :

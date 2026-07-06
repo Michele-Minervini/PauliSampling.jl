@@ -78,21 +78,29 @@ function _ad_chunk(loss_fn, theta, lo::Int, hi::Int, ::Val{C}) where {C}
     r = loss_fn(td)
     return Float64[ForwardDiff.partials(r, s) for s in 1:(hi - lo + 1)], ForwardDiff.value(r)
 end
-function _ad_gradient(loss_fn, theta::Vector{Float64}, ::Val{C}) where {C}
-    K = length(theta); g = zeros(K); nch = cld(K, C); tasks = Vector{Task}(undef, nch)
-    @inbounds for ci in 1:nch
-        lo = (ci - 1) * C + 1; hi = min(ci * C, K)
-        tasks[ci] = Threads.@spawn _ad_chunk(loss_fn, theta, lo, hi, Val(C))
-    end
-    base = 0.0
-    @inbounds for ci in 1:nch
-        lo = (ci - 1) * C + 1; hi = min(ci * C, K)
-        pr, val = fetch(tasks[ci]); ci == 1 && (base = val)
-        for s in eachindex(pr); g[lo + s - 1] = pr[s]; end
+function _ad_gradient(loss_fn, theta::Vector{Float64}, ::Val{C}, max_parallel::Int) where {C}
+    K = length(theta); g = zeros(K); nch = cld(K, C); base = 0.0
+    ci = 1
+    @inbounds while ci <= nch
+        bhi = min(ci + max_parallel - 1, nch)
+        tasks = Vector{Task}(undef, bhi - ci + 1)
+        for cj in ci:bhi
+            lo = (cj - 1) * C + 1; hi = min(cj * C, K)
+            tasks[cj - ci + 1] = Threads.@spawn _ad_chunk(loss_fn, theta, lo, hi, Val(C))
+        end
+        for cj in ci:bhi
+            lo = (cj - 1) * C + 1
+            pr, val = fetch(tasks[cj - ci + 1]); cj == 1 && (base = val)
+            for s in eachindex(pr); g[lo + s - 1] = pr[s]; end
+        end
+        ci = bhi + 1
     end
     return g, base
 end
-ad_gradient(loss_fn, theta::Vector{Float64}; chunk::Int=8) = _ad_gradient(loss_fn, theta, Val(chunk))
+# max_parallel bounds how many chunks are ever in flight at once (memory guard);
+# default keeps the old behavior of spawning every chunk up front.
+ad_gradient(loss_fn, theta::Vector{Float64}; chunk::Int=8, max_parallel::Int=typemax(Int)) =
+    _ad_gradient(loss_fn, theta, Val(chunk), max_parallel)
 
 function _ad_gradient_serial(loss_fn, theta::Vector{Float64}, ::Val{C}) where {C}
     K = length(theta); g = zeros(K); nch = cld(K, C); base = 0.0

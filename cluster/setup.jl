@@ -13,6 +13,7 @@ function getsetup()
         lr          = 0.05,
         seed        = 7,
         gradient    = :ad_serial,         # :ad | :spsa | :fd
+        max_parallel = 5,                 # :ad only — cap on concurrent chunk tasks (memory guard)
         init        = :data_warm,      # :randn | :data | :data_warm | :data_coupling
         init_clamp  = 0.5,         # data_warm: marginal clamp (lower = warmer start)
         init_alpha  = 0.2,         # data_warm: scale on data params (lower = warmer start)
