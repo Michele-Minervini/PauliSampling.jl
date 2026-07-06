@@ -101,7 +101,7 @@ export
     # optimizer + gradient estimators (interchangeable: (loss_fn, theta) -> (grad, loss))
     AdamState, adam_step!,
     spsa_gradient, spsa_gradient_serial, spsa_gradient_threads, spsa_gradient_spawn,
-    forward_fd_gradient_spawn, ad_gradient,
+    forward_fd_gradient_spawn, ad_gradient, ad_gradient_serial,
     # training entry point
     train_qbm
 

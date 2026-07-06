@@ -38,6 +38,7 @@ function main(ARGS)
 
     rng = MersenneTwister(s.seed)
     gradfn = s.gradient === :ad   ? (l, θ) -> ad_gradient(l, θ) :
+             s.gradient === :ad_serial   ? (l, θ) -> ad_gradient_serial(l, θ) :
              s.gradient === :spsa ? (l, θ) -> spsa_gradient(l, θ; rng=rng) :
              s.gradient === :fd   ? (l, θ) -> forward_fd_gradient_spawn(l, θ) :
              error("unknown gradient $(s.gradient)")

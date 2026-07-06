@@ -93,3 +93,14 @@ function _ad_gradient(loss_fn, theta::Vector{Float64}, ::Val{C}) where {C}
     return g, base
 end
 ad_gradient(loss_fn, theta::Vector{Float64}; chunk::Int=8) = _ad_gradient(loss_fn, theta, Val(chunk))
+
+function _ad_gradient_serial(loss_fn, theta::Vector{Float64}, ::Val{C}) where {C}
+    K = length(theta); g = zeros(K); nch = cld(K, C); base = 0.0
+    @inbounds for ci in 1:nch
+        lo = (ci - 1) * C + 1; hi = min(ci * C, K)
+        pr, val = _ad_chunk(loss_fn, theta, lo, hi, Val(C)); ci == 1 && (base = val)
+        for s in eachindex(pr); g[lo + s - 1] = pr[s]; end
+    end
+    return g, base
+end
+ad_gradient_serial(loss_fn, theta::Vector{Float64}; chunk::Int=8) = _ad_gradient_serial(loss_fn, theta, Val(chunk))
