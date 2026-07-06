@@ -5,6 +5,7 @@
 include(joinpath(@__DIR__, "setup.jl"))
 using PauliSampling
 using Serialization, Random, Printf, LinearAlgebra
+using Base.Threads 
 
 function main(ARGS)
     LinearAlgebra.BLAS.set_num_threads(1)
@@ -13,6 +14,8 @@ function main(ARGS)
     max_weight        = parse(Int, ARGS[2])
     neighbor_distance = parse(Int, ARGS[3])
 
+    println("Starting run with min_abs_coeff=$(min_abs_coeff), max_weight=$(max_weight), neighbor_distance=$(neighbor_distance) ", nthreads()," thread(s)")
+    
     s  = getsetup()
     nsteps = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : s.nsteps
     nq = s.rows * s.cols

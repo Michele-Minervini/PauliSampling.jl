@@ -4,20 +4,20 @@ using Base.Threads
 
 using PauliPropagation
 # using F2Algebra
-using Hadamard
+# using Hadamard
 using Combinatorics
 using BenchmarkTools
 using Random
 using LinearAlgebra
-using SparseArrays
-using LinearMaps
-using Arpack
+# using SparseArrays
+# using LinearMaps
+# using Arpack
 using Plots
 using ProgressMeter
 using Distributions
 using Optimisers
 using ReverseDiff
-using MAT
+# using MAT
 using IterTools
 using StatsBase
 using LaTeXStrings

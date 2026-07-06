@@ -14,8 +14,9 @@
 !/src/
 !/test/
 !/cluster/
-# cluster run outputs (serialized) — kept out of git:
-/cluster/results/
+
+# cluster env manifest — kept local only, not pushed:
+/cluster/Manifest.toml
 
 # Junk to drop even inside the tracked folders:
 .DS_Store
