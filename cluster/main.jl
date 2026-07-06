@@ -11,14 +11,16 @@ function main(ARGS)
     LinearAlgebra.BLAS.set_num_threads(1)
     length(ARGS) >= 3 || error("usage: cluster/main.jl <min_abs_coeff> <max_weight> <neighbor_distance> [nsteps]")
     min_abs_coeff     = parse(Float64, ARGS[1])
-    max_weight        = parse(Int, ARGS[2])
+    max_weight        = parse(Float64, ARGS[2])
     neighbor_distance = parse(Int, ARGS[3])
-
-    println("Starting run with min_abs_coeff=$(min_abs_coeff), max_weight=$(max_weight), neighbor_distance=$(neighbor_distance) ", nthreads()," thread(s)")
     
     s  = getsetup()
     nsteps = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : s.nsteps
     nq = s.rows * s.cols
+
+    max_weight = isinf(max_weight) ? nq : Int(max_weight)
+
+    println("Starting run with min_abs_coeff=$(min_abs_coeff), max_weight=$(max_weight), neighbor_distance=$(neighbor_distance) ", nthreads()," thread(s)")
 
     savedir  = joinpath(@__DIR__, "results"); mkpath(savedir)
     savename = joinpath(savedir, @sprintf("qbm_%dx%d_digit%d_d%d_o%d_mac%.0e_mw%d_beta%.1f_%s",
@@ -56,7 +58,9 @@ function main(ARGS)
             length(supp), s.min_count, K, Base.Threads.nthreads())
     flush(stdout)
 
-    gradfn(loss, theta)
+    @time gradfn(loss, theta)
+    println("first gradient passed")
+    flush(stdout)
     for t in 1:nsteps
         dt = @timed begin
             g, _ = gradfn(loss, theta)

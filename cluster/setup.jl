@@ -14,8 +14,8 @@ function getsetup()
         seed        = 7,
         gradient    = :ad,         # :ad | :spsa | :fd
         init        = :data_warm,      # :randn | :data | :data_warm | :data_coupling
-        init_clamp  = 0.9,         # data_warm: marginal clamp (lower = warmer start)
-        init_alpha  = 1.0,         # data_warm: scale on data params (lower = warmer start)
+        init_clamp  = 0.5,         # data_warm: marginal clamp (lower = warmer start)
+        init_alpha  = 0.2,         # data_warm: scale on data params (lower = warmer start)
         min_count   = 2,           # drop target patterns seen fewer than this many times
     )
 end
