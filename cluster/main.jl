@@ -36,7 +36,7 @@ function main(ARGS)
     ds = generate_mnist_dataset(s.rows, s.cols; digit_classes=[s.digit], n_per_class=s.n_per_class,
                                 binarize_method=:adaptive, seed=1)
     supp, probs = extract_support(ds; min_count=s.min_count)
-    probs = [1.0 / length(probs) for _ in probs] # make it uniform
+    # probs = [1.0 / length(probs) for _ in probs] # make it uniform
 
     H  = build_h_general(s.rows, s.cols; max_distance=neighbor_distance, max_order=s.max_order, seed=s.seed)
     K  = length(H)

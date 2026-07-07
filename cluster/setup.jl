@@ -10,7 +10,7 @@ function getsetup()
         num_layers  = 1,
         max_order   = 2,
         nsteps      = 300,
-        lr          = 0.05,
+        lr          = 0.01,
         seed        = 7,
         gradient    = :ad,         # :ad | :spsa | :fd
         max_parallel = 1,                 # :ad only — cap on concurrent chunk tasks (memory guard)
