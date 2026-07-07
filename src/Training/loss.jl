@@ -41,13 +41,30 @@ coefficient type so it stays a `Dual` under AD).
 function kl_support(rho, supp::Vector{BitVector}, probs::Vector{Float64})
     term_coeffs, term_masks = extract_diagonal_terms(rho)
     nq = rho.nqubits
-    kl = zero(eltype(term_coeffs))
-    @inbounds for i in eachindex(supp)
-        pd = probs[i]
-        if pd > 1e-12
-            pm = max(approx_prob_from_terms(term_coeffs, term_masks, nq, reverse(supp[i])), 1e-20)
-            kl += pd * log(pd / pm)
-        end
-    end
-    return kl
+    # kl = zero(eltype(term_coeffs))
+    # @inbounds for i in eachindex(supp)
+    #     pd = probs[i]
+    #     if pd > 1e-12
+    #         pm = max(approx_prob_from_terms(term_coeffs, term_masks, nq, reverse(supp[i])), 1e-20)
+    #         kl += pd * log(pd / pm)
+    #     end
+    # end
+    # return kl 
+
+    ## Multi-threading the computation
+    return AcceleratedKernels.mapreduce(
+        (i) -> begin
+            pd = probs[i]
+            if pd > 1e-12
+                pm = max(approx_prob_from_terms(term_coeffs, term_masks, nq, reverse(supp[i])), 1e-20)
+                return pd * log(pd / pm)
+            else
+                return zero(eltype(term_coeffs))
+            end
+        end,
+        +,
+        collect(eachindex(supp));
+        init=zero(eltype(term_coeffs))
+    )
+
 end

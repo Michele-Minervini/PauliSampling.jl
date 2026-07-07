@@ -1,7 +1,8 @@
 # Batch QBM training on reduced MNIST.
 #   julia --project=. --threads=N cluster/main.jl <min_abs_coeff> <max_weight> <neighbor_distance> [nsteps]
 # Fixed settings live in setup.jl; results are serialized to cluster/results/.
-
+using Pkg
+Pkg.activate(@__DIR__)
 include(joinpath(@__DIR__, "setup.jl"))
 using PauliSampling
 using Serialization, Random, Printf, LinearAlgebra
@@ -35,6 +36,8 @@ function main(ARGS)
     ds = generate_mnist_dataset(s.rows, s.cols; digit_classes=[s.digit], n_per_class=s.n_per_class,
                                 binarize_method=:adaptive, seed=1)
     supp, probs = extract_support(ds; min_count=s.min_count)
+    probs = [1.0 / length(probs) for _ in probs] # make it uniform
+
     H  = build_h_general(s.rows, s.cols; max_distance=neighbor_distance, max_order=s.max_order, seed=s.seed)
     K  = length(H)
 

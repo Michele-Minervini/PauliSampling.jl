@@ -1,3 +1,4 @@
 [deps]
+PauliPropagation = "293282d5-3c99-4fb6-92d0-fd3280a19750"
 PauliSampling = "a394a263-a16a-40b9-95d3-06923dd6990e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"

@@ -12,6 +12,7 @@ using LinearAlgebra
 # using SparseArrays
 # using LinearMaps
 # using Arpack
+using AcceleratedKernels
 using Plots
 using ProgressMeter
 using Distributions
