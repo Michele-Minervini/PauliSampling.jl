@@ -196,9 +196,9 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
         #        AND we are currently in the final layer.
 
         wrapped_psum = propagate!(
-            circuit, wrapped_psum, (beta / num_layers) * thetas; 
+            circuit, wrapped_psum, -(beta / num_layers) * thetas;
             # prune_at_final_step=should_prune, # Pass the dynamic condition
-            max_weight=max_weight, max_sins=max_sins, 
+            max_weight=max_weight, max_sins=max_sins,
             min_abs_coeff=min_abs_coeff, normalization=true, heisenberg=false
         )
     end
@@ -216,7 +216,7 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
     #   a) Terms that didn't commute with the final gate (skipped by applytoall)
     #   b) Numerical noise (abs < 1e-15)
     if optimize_for_z_basis
-        zerofilter!(psum)
+        zerofilter!(unwrapped_psum)
     end
 
     ## THIS IS NOT NECESSARY BECAUSE PROBS NORMALIZE AGAIN
