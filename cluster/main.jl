@@ -13,14 +13,16 @@ const IMAGES_PER_EPOCH = 100
 
 function main(ARGS)
     LinearAlgebra.BLAS.set_num_threads(1)
-    length(ARGS) >= 3 || error("usage: cluster/main.jl <min_abs_coeff> <max_weight> <neighbor_distance> [nsteps]")
-    min_abs_coeff     = parse(Float64, ARGS[1])
-    max_weight        = parse(Float64, ARGS[2])
-    neighbor_distance = parse(Int, ARGS[3])
-    
+    length(ARGS) ==5 || error("usage: cluster/main.jl <nx> <ny> <min_abs_coeff> <max_weight> <neighbor_distance> [nsteps]")
+    nx                = parse(Int, ARGS[1])
+    ny                = parse(Int, ARGS[2])
+    min_abs_coeff     = parse(Float64, ARGS[3])
+    max_weight        = parse(Float64, ARGS[4])
+    neighbor_distance = parse(Int, ARGS[5])
+
     s  = getsetup()
-    nsteps = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : s.nsteps
-    nq = s.rows * s.cols
+    nsteps =  s.nsteps
+    nq = nx * ny
 
     max_weight = isinf(max_weight) ? nq : Int(max_weight)
 
@@ -28,17 +30,17 @@ function main(ARGS)
 
     savedir  = joinpath(@__DIR__, "results"); mkpath(savedir)
     savename = joinpath(savedir, @sprintf("qbm_%dx%d_digit%d_d%d_o%d_mac%.0e_mw%d_beta%.1f_%s",
-        s.rows, s.cols, s.digit, neighbor_distance, s.max_order, min_abs_coeff, max_weight, s.beta, s.gradient))
+        nx, ny, s.digit, neighbor_distance, s.max_order, min_abs_coeff, max_weight, s.beta, s.gradient))
 
     imgdir = joinpath(@__DIR__, "images", join(ARGS, "_"))
     rm(imgdir; force=true, recursive=true); mkpath(imgdir)
 
-    ds = generate_mnist_dataset(s.rows, s.cols; digit_classes=[s.digit], n_per_class=s.n_per_class,
+    ds = generate_mnist_dataset(nx, ny; digit_classes=[s.digit], n_per_class=s.n_per_class,
                                 binarize_method=:adaptive, seed=1)
     supp, probs = extract_support(ds; min_count=s.min_count)
-    # probs = [1.0 / length(probs) for _ in probs] # make it uniform
+    probs = [1.0 / length(probs) for _ in probs] # make it uniform
 
-    H  = build_h_general(s.rows, s.cols; max_distance=neighbor_distance, max_order=s.max_order, seed=s.seed)
+    H  = build_h_general(nx, ny; max_distance=neighbor_distance, max_order=s.max_order, seed=s.seed)
     K  = length(H)
 
     mkrho(θ) = prepare_thermal_state(h_from_flat(θ, H), nq; beta=s.beta, num_layers=s.num_layers,
@@ -63,7 +65,7 @@ function main(ARGS)
     best_loss=Inf; best_theta=copy(theta)
 
     @printf("%dx%d digit=%d | min_abs_coeff=%.0e max_weight=%d neighbor_distance=%d | init=%s gradient=%s nsteps=%d\n",
-            s.rows, s.cols, s.digit, min_abs_coeff, max_weight, neighbor_distance, s.init, s.gradient, nsteps)
+            nx, ny, s.digit, min_abs_coeff, max_weight, neighbor_distance, s.init, s.gradient, nsteps)
     @printf("support=%d (min_count=%d) | K=%d | threads=%d\n",
             length(supp), s.min_count, K, Base.Threads.nthreads())
     flush(stdout)
@@ -87,7 +89,7 @@ function main(ARGS)
         mkpath(epochdir)
         samples  = sample_bitstrings(rho, IMAGES_PER_EPOCH)
         for (i, bv) in enumerate(samples)
-            img = bitvector_to_image(reverse(bv), s.rows, s.cols)
+            img = bitvector_to_image(reverse(bv), nx, ny)
             savefig(heatmap(img; yflip=true, color=:grays, aspect_ratio=:equal, axis=false, colorbar=false),
                     joinpath(epochdir, "$i.pdf"))
         end
