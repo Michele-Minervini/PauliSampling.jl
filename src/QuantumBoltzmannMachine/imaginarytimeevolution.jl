@@ -167,12 +167,13 @@
 #     return psum
 # end
 
-function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer; 
-    beta::Real = 1.0, 
-    max_weight=Inf, 
-    max_sins=Inf, 
+function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVector{CT}, num_layers::Integer;
+    beta::Real = 1.0,
+    max_weight=Inf,
+    max_sins=Inf,
     min_abs_coeff=1e-10,
-    optimize_for_z_basis::Bool = false # <--- New Argument: Master Switch
+    optimize_for_z_basis::Bool = false, # <--- New Argument: Master Switch
+    thread::Bool = true
 ) where {CT}
 
     # psum = PauliSum(CT, nq)
@@ -199,7 +200,7 @@ function makethermalstate(nq::Integer, circuit::Vector{Gate}, thetas::AbstractVe
             circuit, wrapped_psum, -(beta / num_layers) * thetas;
             # prune_at_final_step=should_prune, # Pass the dynamic condition
             max_weight=max_weight, max_sins=max_sins,
-            min_abs_coeff=min_abs_coeff, normalization=true, heisenberg=false
+            min_abs_coeff=min_abs_coeff, normalization=true, heisenberg=false, thread=thread
         )
     end
 

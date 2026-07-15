@@ -48,18 +48,20 @@ function build_h_general(rows::Int, cols::Int;
 end
 
 """
-    prepare_thermal_state(H, nq; beta, num_layers, min_abs_coeff, max_weight)
+    prepare_thermal_state(H, nq; beta, num_layers, min_abs_coeff, max_weight, thread)
 
 Truncated Pauli-ITE thermal state ρ_θ ≈ exp(-βH(θ)) / Z, with `optimize_for_z_basis=true`
 (drops X/Y terms in the final ITE layer since we sample in computational basis).
+`thread=false` disables the `VectorPauliSum` backend's internal multithreading, e.g. when
+callers already run several evaluations concurrently.
 """
 function prepare_thermal_state(H::Vector{<:PauliString}, nq::Int;
         beta::Float64 = 1.0, num_layers::Int = 1,
-        min_abs_coeff::Float64 = 1e-4, max_weight::Int = nq)
+        min_abs_coeff::Float64 = 1e-4, max_weight::Int = nq, thread::Bool = true)
     circuit, thetas = paulistringtocircuit(H)
     return makethermalstate(nq, circuit, thetas, num_layers;
         beta = beta, max_weight = max_weight, min_abs_coeff = min_abs_coeff,
-        optimize_for_z_basis = true)
+        optimize_for_z_basis = true, thread = thread)
 end
 
 """

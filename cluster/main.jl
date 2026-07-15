@@ -47,9 +47,10 @@ function main(ARGS)
     H  = build_h_general(nx, ny; max_distance=neighbor_distance, max_order=s.max_order, seed=s.seed)
     K  = length(H)
 
+    inner_thread = s.max_parallel <= 1
     mkrho(θ) = prepare_thermal_state(h_from_flat(θ, H), nq; beta=s.beta, num_layers=s.num_layers,
-                                     min_abs_coeff=min_abs_coeff, max_weight=max_weight)
-    loss(θ)  = kl_support(mkrho(θ), supp, probs)
+                                     min_abs_coeff=min_abs_coeff, max_weight=max_weight, thread=inner_thread)
+    loss(θ)  = kl_support(mkrho(θ), supp, probs; thread=inner_thread)
 
     rng = MersenneTwister(s.seed)
     gradfn = s.gradient === :ad   ? (l, θ) -> ad_gradient(l, θ; max_parallel=s.max_parallel) :

@@ -30,27 +30,21 @@ function extract_support(dataset::Vector{BitVector}; min_count::Int = 1)
 end
 
 """
-    kl_support(rho, supp, probs) -> KL
+    kl_support(rho, supp, probs; thread=true) -> KL
 
 Forward support-KL between the empirical data distribution (`supp`,`probs`) and the
 model. Extracts the diagonal terms ONCE (independent of the support point), then scores
 every support bitstring against them — ~|supp|× less extraction work than calling
 `get_approx_prob` per point, and type-stable under ForwardDiff (`kl` starts at the
 coefficient type so it stays a `Dual` under AD).
+`thread=false` runs the reduction over support points single-threaded, e.g. when the
+caller already runs several evaluations concurrently.
 """
-function kl_support(rho, supp::Vector{BitVector}, probs::Vector{Float64})
+function kl_support(rho, supp::Vector{BitVector}, probs::Vector{Float64}; thread::Bool = true)
     term_coeffs, term_masks = extract_diagonal_terms(rho)
     nq = rho.nqubits
-    # kl = zero(eltype(term_coeffs))
-    # @inbounds for i in eachindex(supp)
-    #     pd = probs[i]
-    #     if pd > 1e-12
-    #         pm = max(approx_prob_from_terms(term_coeffs, term_masks, nq, reverse(supp[i])), 1e-20)
-    #         kl += pd * log(pd / pm)
-    #     end
-    # end
-    # return kl 
 
+    
     ## Multi-threading the computation
     return AcceleratedKernels.mapreduce(
         (i) -> begin
@@ -64,7 +58,8 @@ function kl_support(rho, supp::Vector{BitVector}, probs::Vector{Float64})
         end,
         +,
         collect(eachindex(supp));
-        init=zero(eltype(term_coeffs))
+        init=zero(eltype(term_coeffs)),
+        max_tasks=thread ? Threads.nthreads() : 1
     )
 
 end
