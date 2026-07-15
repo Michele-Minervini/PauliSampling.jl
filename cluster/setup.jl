@@ -10,11 +10,11 @@ function getsetup()
         nsteps      = 300,
         lr          = 0.01,
         seed        = 7,
-        gradient    = :ad_serial,         # :ad | :spsa | :fd
-        max_parallel = 1,                 # :ad only — cap on concurrent chunk tasks (memory guard)
+        gradient    = :ad,         # :ad | :spsa | :fd
+        max_parallel = 10,                 # :ad only — cap on concurrent chunk tasks (memory guard)
         init        = :data_warm,      # :randn | :data | :data_warm | :data_coupling
         init_clamp  = 0.5,         # data_warm: marginal clamp (lower = warmer start)
         init_alpha  = 0.3,         # data_warm: scale on data params (lower = warmer start)
-        min_count   = 2,           # drop target patterns seen fewer than this many times
+        min_count   = 1,           # drop target patterns seen fewer than this many times
     )
 end

@@ -54,14 +54,14 @@ VSCodeServer.@profview kl_support(rho, supp, probs)
 
 # This is to get a sense of how the data looks
 using Plots
-nx = 6 #length(ARGS) >= 1 ? parse(Int, ARGS[1]) : s.rows
-ny = 5 #length(ARGS) >= 2 ? parse(Int, ARGS[2]) : s.cols
-n_show = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 8
+nx = 7 #length(ARGS) >= 1 ? parse(Int, ARGS[1]) : s.rows
+ny = 7 #length(ARGS) >= 2 ? parse(Int, ARGS[2]) : s.cols
+n_show = 6 # length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 8
 
-ds = generate_mnist_dataset(nx, ny; digit_classes=[0], n_per_class=s.n_per_class,
+ds = generate_mnist_dataset(nx, ny; digit_classes=[0], n_per_class=1000,
                              binarize_method=:adaptive, seed=1)
 
-supp, probs = extract_support(ds; min_count=s.min_count)
+supp, probs = extract_support(ds; min_count=1)
 inds = sortperm(probs; rev=true)
 supp = supp[inds]
 probs = probs[inds]

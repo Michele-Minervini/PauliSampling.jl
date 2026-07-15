@@ -1,15 +1,15 @@
 CURRENT_DIR = @__DIR__
 
 ## Sweep over the hyperparameters main.jl expects:
-sizes = [(7, 7)]
+sizes = [(7, 6)]
 ##   min_abs_coeff  max_weight  neighbor_distance  [nsteps]
-min_abs_coeff_vals = [3e-2, 1e-2] # [1e-2, 1e-3, 1e-4]
+min_abs_coeff_vals = [3e-2, 1e-2, 7e-3] # [1e-2, 1e-3, 1e-4]
 
-max_weight_vals = [8, Inf]
+max_weight_vals = [Inf]
 
-neighbor_distance_vals = [1]
+neighbor_distance_vals = [2]
 
-continue_run = true
+continue_run = false
 
 f = open("$CURRENT_DIR/parameters.txt"; write=true)
 for ((nx, ny), min_abs_coeff, max_weight, neighbor_distance) in Iterators.product(sizes, min_abs_coeff_vals, max_weight_vals, neighbor_distance_vals)
