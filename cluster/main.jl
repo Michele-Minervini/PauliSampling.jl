@@ -13,12 +13,13 @@ const IMAGES_PER_EPOCH = 100
 
 function main(ARGS)
     LinearAlgebra.BLAS.set_num_threads(1)
-    length(ARGS) ==5 || error("usage: cluster/main.jl <nx> <ny> <min_abs_coeff> <max_weight> <neighbor_distance> [nsteps]")
+    length(ARGS) in (5, 6) || error("usage: cluster/main.jl <nx> <ny> <min_abs_coeff> <max_weight> <neighbor_distance> [continue::Bool]")
     nx                = parse(Int, ARGS[1])
     ny                = parse(Int, ARGS[2])
     min_abs_coeff     = parse(Float64, ARGS[3])
     max_weight        = parse(Float64, ARGS[4])
     neighbor_distance = parse(Int, ARGS[5])
+    continue_run      = length(ARGS) == 6 ? parse(Bool, ARGS[6]) : false
 
     s  = getsetup()
     nsteps =  s.nsteps
@@ -32,8 +33,11 @@ function main(ARGS)
     savename = joinpath(savedir, @sprintf("qbm_%dx%d_digit%d_d%d_o%d_mac%.0e_mw%d_beta%.1f_%s",
         nx, ny, s.digit, neighbor_distance, s.max_order, min_abs_coeff, max_weight, s.beta, s.gradient))
 
-    imgdir = joinpath(@__DIR__, "images", join(ARGS, "_"))
-    rm(imgdir; force=true, recursive=true); mkpath(imgdir)
+    imgdir = joinpath(@__DIR__, "images", join(ARGS[1:5], "_"))
+    if !continue_run
+        rm(imgdir; force=true, recursive=true)
+    end
+    mkpath(imgdir)
 
     ds = generate_mnist_dataset(nx, ny; digit_classes=[s.digit], n_per_class=s.n_per_class,
                                 binarize_method=:adaptive, seed=1)
@@ -64,16 +68,28 @@ function main(ARGS)
     losses=Float64[]; params=Vector{Float64}[]; paulis=Int[]; times=Float64[]; grad_norms=Float64[]
     best_loss=Inf; best_theta=copy(theta)
 
+    if continue_run && isfile(savename)
+        println("Continuing from existing checkpoint: ", savename)
+        state = deserialize(savename)
+        losses     = state.losses
+        params     = state.params
+        paulis     = state.paulis
+        times      = state.times
+        grad_norms = state.grad_norms
+        best_loss  = state.best_loss
+        best_theta = copy(state.best_theta)
+        theta      = copy(params[end])
+    elseif continue_run
+        println("continue=true but no checkpoint found at ", savename, " — starting fresh")
+    end
+
     @printf("%dx%d digit=%d | min_abs_coeff=%.0e max_weight=%d neighbor_distance=%d | init=%s gradient=%s nsteps=%d\n",
             nx, ny, s.digit, min_abs_coeff, max_weight, neighbor_distance, s.init, s.gradient, nsteps)
     @printf("support=%d (min_count=%d) | K=%d | threads=%d\n",
             length(supp), s.min_count, K, Base.Threads.nthreads())
     flush(stdout)
 
-    @time gradfn(loss, theta)
-    println("first gradient passed")
-    flush(stdout)
-    for t in 1:nsteps
+    for t in (length(losses)+1):nsteps
         dt = @timed begin
             g, _ = gradfn(loss, theta)
             adam_step!(theta, g, s.lr, adam)

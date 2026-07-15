@@ -2,8 +2,6 @@
 # (min_abs_coeff, max_weight, neighbor_distance) are passed on the command line.
 function getsetup()
     return (
-        rows        = 6,
-        cols        = 5,
         digit       = 0,
         n_per_class = 1000,
         beta        = 1.0,
@@ -12,7 +10,7 @@ function getsetup()
         nsteps      = 300,
         lr          = 0.01,
         seed        = 7,
-        gradient    = :ad,         # :ad | :spsa | :fd
+        gradient    = :ad_serial,         # :ad | :spsa | :fd
         max_parallel = 1,                 # :ad only — cap on concurrent chunk tasks (memory guard)
         init        = :data_warm,      # :randn | :data | :data_warm | :data_coupling
         init_clamp  = 0.5,         # data_warm: marginal clamp (lower = warmer start)
